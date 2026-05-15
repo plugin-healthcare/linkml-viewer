@@ -12,12 +12,12 @@ const config = {
 			fallback: process.env.TAURI_ENV_PLATFORM ? 'index.html' : '404.html'
 		}),
 		paths: {
-			// In production the app is served at /plugin-link on GitHub Pages.
+			// In production the app is served at /linkml-viewer on GitHub Pages.
 			// During Tauri builds (TAURI_ENV_PLATFORM is set) the base must be empty.
 			// In development (npm run dev) the base is empty so relative paths work.
 			base:
 				process.env.NODE_ENV === 'production' && !process.env.TAURI_ENV_PLATFORM
-					? '/plugin-link'
+					? '/linkml-viewer'
 					: ''
 		}
 	}

@@ -1,4 +1,4 @@
-# plugin-link
+# linkml-viewer
 
 A generic [LinkML](https://linkml.io/) ERD viewer built with [SvelteKit](https://svelte.dev/docs/kit) and [Svelte Flow](https://svelteflow.dev/).
 
