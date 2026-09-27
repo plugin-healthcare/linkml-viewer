@@ -1,4 +1,4 @@
-# plugin-link justfile
+# linkml-viewer justfile
 
 # Default recipe: start the dev server
 default:

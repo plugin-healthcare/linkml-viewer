@@ -1,12 +1,12 @@
 [package]
-name = "plugin-link"
+name = "linkml-viewer"
 version = "0.1.1"
-description = "plugin-link desktop app"
+description = "linkml-viewer desktop app"
 authors = []
 edition = "2021"
 
 [lib]
-name = "plugin_link_lib"
+name = "linkml_viewer_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

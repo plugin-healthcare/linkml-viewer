@@ -12,14 +12,16 @@ const config = {
 			fallback: process.env.TAURI_ENV_PLATFORM ? 'index.html' : '404.html'
 		}),
 		paths: {
-			// In production the app is served at /plugin-link on GitHub Pages.
+			// In production the app is served at /linkml-viewer — the repository
+			// name (GitHub Pages project base) and the Cloudflare ingress both
+			// use it, so the static export and the served origin share one base.
 			// During Tauri builds (TAURI_ENV_PLATFORM is set) the base must be empty.
 			// In development (npm run dev) the base is empty so relative paths work.
-			// BASE_PATH overrides the production sub-path (e.g. /linkml-viewer).
+			// BASE_PATH overrides the production sub-path.
 			base:
 				process.env.BASE_PATH ??
 				(process.env.NODE_ENV === 'production' && !process.env.TAURI_ENV_PLATFORM
-					? '/plugin-link'
+					? '/linkml-viewer'
 					: '')
 		}
 	}

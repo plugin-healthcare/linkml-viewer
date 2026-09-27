@@ -1,7 +1,7 @@
 {
-  "productName": "plugin-link",
+  "productName": "linkml-viewer",
   "version": "0.1.1",
-  "identifier": "org.plugin-healthcare.plugin-link",
+  "identifier": "org.plugin-healthcare.linkml-viewer",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "plugin-link",
+        "title": "linkml-viewer",
         "width": 1400,
         "height": 900
       }

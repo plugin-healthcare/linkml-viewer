@@ -20,6 +20,8 @@
   import GroupEditor from '$lib/components/GroupEditor.svelte';
   import FileList from '$lib/components/FileList.svelte';
   import ExampleMenu from '$lib/components/ExampleMenu.svelte';
+  import RelationshipInspector from '$lib/components/RelationshipInspector.svelte';
+  import ProvenanceDialog from '$lib/components/ProvenanceDialog.svelte';
 
   import {
     assignFileIds,
@@ -31,7 +33,7 @@
   } from '$lib/linkml';
   import { buildGraph, COL_ID_SEP } from '$lib/layout';
   import { applyEdgeLod } from '$lib/edgeLod';
-  import { deriveRelationshipFocus, applyEdgeFocus, NO_FOCUS } from '$lib/edgeFocus';
+  import { deriveRelationshipFocus, applyEdgeFocus, tableIdOf, NO_FOCUS } from '$lib/edgeFocus';
   import type {
     NormalizedSchema,
     LayoutOptions,
@@ -311,6 +313,8 @@
     restoreViewport: () => void;
     moveCursor: (ids: string[], fromId: string | null, dir: NavDirection) => string | null;
     centerNode: (id: string) => void;
+    selectEdges: (ids: string[]) => void;
+    clearSelection: () => void;
   }>();
 
   // Tracks schema identity so only genuine schema changes request a fit.
@@ -324,6 +328,10 @@
   // Editor panel visibility
   let schemaEditorOpen = $state(false);
   let groupEditorOpen = $state(false);
+  let inspectorOpen = $state(false);
+
+  // R2.8.13 — provenance dialog (read-only projection of the artefact metadata).
+  let aboutOpen = $state(false);
 
   // Raw YAML text for SchemaEditor — tracks the active file's text
   const schemaYamlText = $derived(
@@ -611,6 +619,19 @@
     collapsed = new Set(allClassIds);
   }
 
+  // R2.8.12 relationship inspector. Selecting an inspector row selects that
+  // edge natively (identical to a canvas edge click, so relationship focus and
+  // the strong-edge emphasis follow for free) and recentres on the target table.
+  function handleInspectorSelectEdge(edgeId: string) {
+    const edge = edges.find((e) => e.id === edgeId);
+    flowController?.selectEdges([edgeId]);
+    if (edge) flowController?.centerNode(tableIdOf(edge.target));
+  }
+
+  function closeInspector() {
+    inspectorOpen = false;
+  }
+
   // ---------------------------------------------------------------------------
   // Keyboard graph navigation. Spatial, not DOM-order: arrow keys move the
   // cursor to the most aligned neighbour in that direction. Centring uses
@@ -867,6 +888,17 @@ onMount(() => {
           Groups
         </button>
 
+        <button
+          class="editor-btn"
+          class:active={inspectorOpen}
+          title="Inspect selected relationships"
+          onclick={() => { inspectorOpen = !inspectorOpen; }}
+          aria-pressed={inspectorOpen}
+        >
+          <span class="editor-btn-icon">&#9671;</span>
+          Relationships
+        </button>
+
         <div class="uploader-wrap">
           <SchemaUploader
             onfiles={handleUploadedFiles}
@@ -875,6 +907,16 @@ onMount(() => {
         </div>
 
         <ExampleMenu {activeStem} loading={layoutLoading} onload={handleLoadExample} />
+
+        <!-- Provenance / about (R2.8.13) -->
+        <button
+          class="editor-btn icon-only"
+          title="About this model — producer, reconciliation, reproducibility"
+          aria-label="About this model"
+          onclick={() => { aboutOpen = true; }}
+        >
+          <span class="editor-btn-icon">&#9432;</span>
+        </button>
       </div>
     </div>
 
@@ -995,7 +1037,26 @@ onMount(() => {
           onclose={() => { groupEditorOpen = false; }}
         />
       {/if}
+
+      {#if inspectorOpen}
+        <RelationshipInspector
+          {edges}
+          selectedTableIds={focusCtx.selectedTableIds}
+          selectedEdgeIds={focusCtx.strongEdgeIds}
+          onselectedge={handleInspectorSelectEdge}
+          onclose={closeInspector}
+        />
+      {/if}
     </div>
+
+    {#if aboutOpen && schema?.provenance}
+      <ProvenanceDialog
+        provenance={schema.provenance}
+        schemaName={schema.name}
+        schemaId={schema.id}
+        onclose={() => { aboutOpen = false; }}
+      />
+    {/if}
   </div>
 </div>
 
@@ -1137,6 +1198,15 @@ onMount(() => {
   .editor-btn-icon {
     font-size: 11px;
     opacity: 0.8;
+  }
+
+  /* Icon-only variant (e.g. About) — keeps the top bar compact. */
+  .editor-btn.icon-only {
+    padding: 4px 7px;
+  }
+
+  .editor-btn.icon-only .editor-btn-icon {
+    font-size: 14px;
   }
 
   .uploader-wrap {

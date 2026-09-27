@@ -10,4 +10,4 @@ BASE_PATH=/linkml-viewer npm run build
 
 launchctl kickstart -k "gui/$(id -u)/$LABEL" 2>/dev/null || true
 
-echo "deployed -> https://hafizdzaidi.com/linkml-viewer/"
+echo "deployed -> https://plugin.dhd.nl/linkml-viewer/"

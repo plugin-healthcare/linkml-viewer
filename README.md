@@ -1,4 +1,4 @@
-# plugin-link
+# linkml-viewer
 
 A generic [LinkML](https://linkml.io/) ERD viewer built with [SvelteKit](https://svelte.dev/docs/kit) and [Svelte Flow](https://svelteflow.dev/).
 
@@ -52,7 +52,7 @@ There are two production shapes and two local shapes. The bundled viewer is alwa
 | Mode | Bundled viewer (static) | Upload / hand-edited reconcile | Reconciliation executed by | Base path |
 |---|---|---|---|---|
 | **Production — served origin** (`deploy/serve.mjs` under launchd `com.semiac.linkml-viewer`, Cloudflare ingress `/linkml-viewer/*`) | yes | yes — `POST /linkml-viewer/reconcile` | the same `produce.py` via `deploy/producer-runner.mjs` | `/linkml-viewer` (`BASE_PATH`) |
-| **Production — static export** (GitHub Pages via `.github/workflows/deploy.yml`) | yes | **no** — no server hook; requires `VITE_RECONCILE_URL` pointing at a served origin | none (artefacts baked at build) | `/plugin-link` (default) |
+| **Production — static export** (GitHub Pages via `.github/workflows/deploy.yml`) | yes | **no** — no server hook; requires `VITE_RECONCILE_URL` pointing at a served origin | none (artefacts baked at build) | `/linkml-viewer` |
 | **Desktop** (Tauri v2) | yes | no in-app server; requires `VITE_RECONCILE_URL` for uploads | none | empty |
 | **Vite dev** (`bun run dev`) | yes (generated off the critical path) | yes — `POST /reconcile` middleware in `vite.config.ts` | the same `produce.py` via `deploy/producer-runner.mjs` | empty |
 | **Vite preview** (`bun run preview`) | yes (prebuilt) | no (mirrors the static export) | none | empty |
@@ -127,6 +127,8 @@ src-tauri/
 - Collapsible table nodes (click the chevron in the header); clicking the header itself selects the table
 - **Selection semantics** — the chosen table/row is *selected*, its neighbours *related*, the rest *dimmed*; collapse (the chevron) is a distinct affordance and never changes the selection
 - **Relationship labels** — the inspected (selected/hovered) relationship shows its slot name at a stable screen size; below LOD2 the full static label set is suppressed
+- **Relationship inspector** — a *Relationships* panel lists the selected table's outgoing and incoming relationships (slot → target, FK/ETL tagged); clicking a row selects and focuses that relationship on the canvas. It reads the same reconciled edge surface the canvas uses
+- **Provenance / About** — an *About* dialog states what established the model (the single producer and its pinned LinkML/Python toolchain), the reconciliation counts and per-generator status (including recorded upstream limitations), and the reproducibility digests — all read from the authoritative artefact
 - **Examples menu** — switch between the bundled example schemas (OMOP CDM, SEIN) with a LinkML → ERD vocabulary note: *Class → Table · Slot → Column · Range → related table*
 - Top-bar search with keyboard navigation and canvas pan-to-node
 - MiniMap with group-aware node coloring

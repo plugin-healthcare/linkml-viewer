@@ -1,4 +1,4 @@
-# Locked producer environment for plugin-link (linkml-viewer).
+# Locked producer environment for linkml-viewer.
 #
 # This is NOT a package: it is the virtual uv project that owns the single
 # LinkML reconciliation authority (`produce.py`). The dependency pin and the
@@ -16,7 +16,7 @@
 [project]
 name = "linkml-viewer-producer"
 version = "0.0.0"
-description = "Off-client LinkML reconciliation producer for plugin-link."
+description = "Off-client LinkML reconciliation producer for linkml-viewer."
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "linkml==1.11.1",

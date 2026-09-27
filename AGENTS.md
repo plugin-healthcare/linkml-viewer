@@ -1,4 +1,4 @@
-# AGENTS.md — plugin-link
+# AGENTS.md — linkml-viewer
 
 Summary of the project architecture and key design decisions for AI coding agents working on this codebase.
 
@@ -12,7 +12,7 @@ There is no in-browser LinkML runtime. The bundled-schema viewer is a pure clien
 
 The project ships three deployment targets from the same SvelteKit frontend:
 
-- **Web / GitHub Pages** — static SPA built with `@sveltejs/adapter-static`, deployed via `.github/workflows/deploy.yml`. Serves the bundled schemas only (no reconcile endpoint). Base path `/plugin-link`.
+- **Web / GitHub Pages** — static SPA built with `@sveltejs/adapter-static`, deployed via `.github/workflows/deploy.yml`. Serves the bundled schemas only (no reconcile endpoint). Base path `/linkml-viewer`.
 - **Served origin** — the same static build served by `deploy/serve.mjs` under launchd (`com.semiac.linkml-viewer`, `PORT=4180`) behind Cloudflare, which also exposes `POST /linkml-viewer/reconcile` for uploads. Base path `/linkml-viewer`.
 - **Desktop (Tauri v2)** — the same static build is wrapped in a native window using [Tauri v2](https://tauri.app). The Tauri shell lives in `src-tauri/` and adds no extra Rust logic beyond the standard app harness. Supports macOS (`.app` / `.dmg`), Windows (`.exe` / `.msi`), and Linux (`.deb` / `.AppImage`). No in-app reconcile server.
 
@@ -91,10 +91,10 @@ Tauri v2 CLI is invoked via `bun run tauri:dev` / `bun run tauri:build` (see `pa
 ## Directory layout
 
 ```
-plugin-link/
+linkml-viewer/
 ├── .github/workflows/deploy.yml  # deploy to GitHub Pages on push to main
 ├── justfile                      # default recipe: bun run dev; also Tauri build recipes
-├── svelte.config.js              # adapter-static, base: /plugin-link in prod
+├── svelte.config.js              # adapter-static, base: /linkml-viewer in prod
 ├── produce.py                    # the single LinkML producer (pinned linkml 1.11.1); invoked by vite.config.ts
 ├── vite.config.ts                # native pipeline: sveltekit() + bundled artefact generation + POST /reconcile (dev)
 ├── src-tauri/                    # Tauri v2 desktop shell
@@ -138,7 +138,9 @@ plugin-link/
             ├── SchemaUploader.svelte  # top-bar button + drag-and-drop file picker
             ├── SearchBar.svelte       # top-bar search with keyboard nav and canvas pan
             ├── ColumnNode.svelte      # custom child node: one table column row
-            └── TableParentNode.svelte # custom parent node: collapsible table card with group header color
+            ├── TableParentNode.svelte # custom parent node: collapsible table card with group header color
+            ├── RelationshipInspector.svelte # right panel: selected table's outgoing/incoming relationships
+            └── ProvenanceDialog.svelte # modal: producer, reconciliation counts/generators, digests
 ```
 
 ---
@@ -426,6 +428,63 @@ Props:
 
 ---
 
+## Relationship inspector (`src/lib/components/RelationshipInspector.svelte`)
+
+A right-docked panel (R2.8.12), toggled from the top-bar **Relationships** button
+(`inspectorOpen` in `+page.svelte`, default closed). It is **presentation-only**.
+
+- Consumes the **same reconciled relationship surface the canvas consumes** — the
+  layout `edges` array (materialised by `layout.ts` from the artefact). It never
+  re-parses LinkML and never re-derives a relationship, preserving the single
+  path `producer → reconciled artefact → layout edges → { canvas, focus, inspector }`.
+  There is no second semantic path.
+- For the focused table it lists **Outgoing** (edges whose source table owns the
+  table) and **Incoming** relationships, each row showing `slot → target` with an
+  `FK` / `ETL` tag. When an edge is selected (edge precedence makes
+  `selectedTableIds` empty), the source table is used as the list context and the
+  selected row is marked, so the list never disappears on selection.
+- Clicking a row selects that edge **natively** via `flowController.selectEdges`
+  (the flow store), so relationship focus and the strong-edge emphasis are the
+  ordinary ones; the parent also recentres on the target table. `onclose` closes
+  the panel without changing the canvas selection.
+
+Props:
+- `edges: Edge[]` — the materialised relationship surface
+- `selectedTableIds: ReadonlySet<string>` / `selectedEdgeIds: ReadonlySet<string>`
+- `onselectedge: (edgeId: string) => void` / `onclose: () => void`
+
+Regression coverage: `e2e/relationship-inspector.spec.ts`.
+
+---
+
+## Provenance dialog (`src/lib/components/ProvenanceDialog.svelte`)
+
+A read-only modal (R2.8.13), opened from the top-bar **About** (ⓘ) button. It
+surfaces the reconciliation/authority that the audit found invisible, using only
+fields the producer **already emits** — no artefact or producer change:
+
+- **Schema**: name, id, source path.
+- **Producer**: `produce.py` version, LinkML + linkml-runtime + Python versions,
+  artefact format/version.
+- **Reconciled content**: class / FK (cross + self) / ETL / identifier counts and
+  the total recorded reconciliation gaps.
+- **Generators**: per-generator status (`reconciled` / `limited`), including the
+  producer's recorded upstream limitations (e.g. the SQL / JSON-Schema
+  recursion), so the viewer states *what was reconciled* rather than presenting
+  the graph as unmediated.
+- **Reproducibility**: schema fingerprint, content digest, output digest
+  (shortened; full value on hover).
+
+`projectReconciledArtifact` in `linkml.ts` projects these fields 1:1 into a
+`Provenance` view-model (`types.ts`); nothing is recomputed or written back. If a
+future artefact lacks a field the dialog simply omits it. Closing is via the
+button or `Escape`; the dialog uses `role="dialog"` / `aria-modal` and an
+attachment moves focus into the card on open.
+
+Regression coverage: `e2e/provenance.spec.ts`.
+
+---
+
 ## File list (`src/lib/components/FileList.svelte`)
 
 A left-side sidebar section showing the workspace files currently loaded.
@@ -513,7 +572,7 @@ Uses Svelte 5 runes throughout:
 
 ## Build configuration
 
-- **`svelte.config.js`**: uses `adapter-static` with `fallback: '404.html'` for client-side routing on GitHub Pages. The `base` path is `/plugin-link` in production (`NODE_ENV=production`) and empty in development.
+- **`svelte.config.js`**: uses `adapter-static` with `fallback: '404.html'` for client-side routing on GitHub Pages. The `base` path is `/linkml-viewer` in production (`NODE_ENV=production`) and empty in development.
 - **`src/routes/+layout.ts`**: sets `ssr = false` only. `prerender` is intentionally omitted — Tauri requires SPA mode (a single `index.html` entry point), and GitHub Pages works via the `404.html` fallback without a full prerender.
 - **`vite.config.ts`**: `sveltekit()` plugin plus `build.chunkSizeWarningLimit: 1600` to silence the bundle-size warning from the ~1.4 MB `elk.bundled.js` chunk.
 

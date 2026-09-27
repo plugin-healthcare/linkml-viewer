@@ -35,6 +35,8 @@ import type {
   WorkspaceFile,
   FileInfo,
   ReconciledRelationship,
+  Provenance,
+  ProvenanceGenerator,
 } from './types';
 
 type AnyRec = Record<string, any>;
@@ -120,6 +122,20 @@ interface ReconciledArtifactRelationship {
 }
 
 /** Shape of `static/reconciled/<name>.json` (and the `/reconcile` response). */
+export interface ReconciledNativeLimitation {
+  kind: string;
+  error?: string;
+  detail?: string;
+  site?: string;
+}
+
+export interface ReconciledGeneratorStatus {
+  generator: string;
+  ok: boolean;
+  gaps?: unknown[];
+  native_limitation?: ReconciledNativeLimitation | null;
+}
+
 export interface ReconciledArtifact {
   artifact: { format: string; version: number };
   reproducibility: Record<string, unknown>;
@@ -127,6 +143,79 @@ export interface ReconciledArtifact {
   classes: ReconciledArtifactClass[];
   relationships: ReconciledArtifactRelationship[];
   counts: Record<string, number>;
+  /**
+   * Recorded reconciliation facts (R2.8.13). Read-only presentation metadata:
+   * what each upstream generator produced and where an upstream limitation was
+   * reconciled. Never re-derived or written back by the viewer.
+   */
+  generator_reconciliation?: {
+    gaps?: unknown[];
+    generators?: Record<string, ReconciledGeneratorStatus>;
+    lifecycle?: ReconciledGeneratorStatus;
+  };
+}
+
+function provenanceString(v: unknown): string | null {
+  return typeof v === 'string' && v.length > 0 ? v : null;
+}
+
+/**
+ * Project the artefact's provenance 1:1 into the viewer's `Provenance`
+ * view-model. Pure read — no field is recomputed, inferred, or written back.
+ */
+function projectProvenance(artifact: ReconciledArtifact): Provenance {
+  const repro = artifact.reproducibility ?? {};
+  const counts = artifact.counts ?? {};
+  const gr = artifact.generator_reconciliation ?? {};
+  const generatorInfo = repro.generator as { name?: unknown; version?: unknown } | undefined;
+
+  const generators: ProvenanceGenerator[] = [];
+  let gaps = gr.gaps?.length ?? 0;
+
+  for (const [name, g] of Object.entries(gr.generators ?? {})) {
+    gaps += g.gaps?.length ?? 0;
+    generators.push({
+      name,
+      generator: g.generator,
+      ok: g.ok,
+      limitation: g.native_limitation?.detail ?? g.native_limitation?.kind ?? null,
+    });
+  }
+  if (gr.lifecycle) {
+    gaps += gr.lifecycle.gaps?.length ?? 0;
+    generators.push({
+      name: 'lifecycle',
+      generator: gr.lifecycle.generator,
+      ok: gr.lifecycle.ok,
+      limitation:
+        gr.lifecycle.native_limitation?.detail ?? gr.lifecycle.native_limitation?.kind ?? null,
+    });
+  }
+
+  return {
+    artifactFormat: artifact.artifact?.format ?? '',
+    artifactVersion: artifact.artifact?.version ?? 0,
+    schemaPath: provenanceString(repro.schema_path),
+    schemaFingerprint: provenanceString(repro.schema_fingerprint),
+    contentDigest: provenanceString(repro.content_digest),
+    outputDigest: provenanceString(repro.output_digest),
+    producerName: provenanceString(generatorInfo?.name),
+    producerVersion: provenanceString(generatorInfo?.version),
+    linkmlVersion: provenanceString(repro.linkml_version),
+    linkmlRuntimeVersion: provenanceString(repro.linkml_runtime_version),
+    pythonVersion: provenanceString(repro.python_version),
+    counts: {
+      classes: counts.classes_non_abstract ?? counts.classes_total ?? 0,
+      fkCross: counts.fk_slots_cross ?? 0,
+      fkSelf: counts.fk_slots_self ?? 0,
+      fkTotal: counts.fk_slots_total ?? 0,
+      etl: counts.etl_relationships ?? 0,
+      identifiers: counts.identifiers ?? 0,
+      keys: counts.keys ?? 0,
+    },
+    generators,
+    reconciliationGaps: gaps,
+  };
 }
 
 const RECONCILED_ARTIFACT_FORMAT = 'linkml-viewer-reconciled';
@@ -202,6 +291,7 @@ export function projectReconciledArtifact(artifact: ReconciledArtifact): Normali
     classes,
     relationships,
     unresolved: [],
+    provenance: projectProvenance(artifact),
   };
 }
 

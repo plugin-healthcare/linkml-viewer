@@ -93,6 +93,52 @@ export interface ReconciledRelationship {
   required: boolean;
 }
 
+/** One generator's reconciliation status, recorded by the producer. */
+export interface ProvenanceGenerator {
+  /** Key the producer used (e.g. `erd`, `sql`, `lifecycle`). */
+  name: string;
+  /** The upstream generator class name. */
+  generator: string;
+  /** Whether the producer's reconciliation for this generator succeeded. */
+  ok: boolean;
+  /** Recorded upstream limitation (e.g. an upstream recursion), or null. */
+  limitation: string | null;
+}
+
+/**
+ * Producer / reconciliation provenance (R2.8.13), projected 1:1 from the
+ * authoritative artefact (`schema`, `counts`, `reproducibility`,
+ * `generator_reconciliation`). Presentation only — read, never recomputed or
+ * written back. It exists so the viewer can state *what established the model*
+ * (the single producer and its pinned toolchain) and *what was reconciled*,
+ * rather than presenting the graph as if it appeared unmediated.
+ */
+export interface Provenance {
+  artifactFormat: string;
+  artifactVersion: number;
+  schemaPath: string | null;
+  schemaFingerprint: string | null;
+  contentDigest: string | null;
+  outputDigest: string | null;
+  producerName: string | null;
+  producerVersion: string | null;
+  linkmlVersion: string | null;
+  linkmlRuntimeVersion: string | null;
+  pythonVersion: string | null;
+  counts: {
+    classes: number;
+    fkCross: number;
+    fkSelf: number;
+    fkTotal: number;
+    etl: number;
+    identifiers: number;
+    keys: number;
+  };
+  generators: ProvenanceGenerator[];
+  /** Total recorded reconciliation gaps across the producer's generators. */
+  reconciliationGaps: number;
+}
+
 /** The top-level normalized schema structure */
 export interface NormalizedSchema {
   name: string;
@@ -107,6 +153,8 @@ export interface NormalizedSchema {
   relationships: ReconciledRelationship[];
   /** Import names left unresolved by the workspace resolver. */
   unresolved?: string[];
+  /** Producer / reconciliation provenance, read 1:1 from the artefact. */
+  provenance?: Provenance;
 }
 
 // ---------------------------------------------------------------------------

@@ -96,6 +96,20 @@
     setCenter(c.x, c.y, { zoom: getViewport().zoom, duration: 300 });
   }
 
+  // Inspector-driven selection (R2.8.12). The inspector is presentation-only; it
+  // asks the flow store to select an edge exactly as a canvas click would, so
+  // relationship focus derives from the same native selection. Selecting an edge
+  // clears any node selection (matching a canvas edge click). `clearSelection`
+  // deselects everything.
+  export function selectEdges(ids: string[]) {
+    store.unselectNodesAndEdges();
+    store.addSelectedEdges(ids);
+  }
+
+  export function clearSelection() {
+    store.unselectNodesAndEdges();
+  }
+
   // R2.8.10 first-load camera. `overview` fits the whole graph (default);
   // `entry` opens on the configured class at a readable zoom. The duration is a
   // parameter so the initial fit can animate while the seam switches instantly.

@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    plugin_link_lib::run()
+    linkml_viewer_lib::run()
 }
