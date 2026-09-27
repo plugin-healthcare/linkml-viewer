@@ -48,25 +48,42 @@
     // store.nodesConnectable stays false — never assigned here.
   }
 
-  const LAYOUT_BUTTONS: Array<{
-    engine: LayoutOptions['engine'];
+  // R2.8.11 — the layout is exposed as two orthogonal, intent-labelled axes
+  // instead of the engine-initials glyphs (`D→ D↓ E→ E↓`). Direction is the
+  // primary control ("Left → Right" / "Top → Bottom"); the engine (Dagre / ELK)
+  // is secondary. Selecting either axis preserves the other, and a click is a
+  // plain `onlayoutselect` on the resulting combination — no new semantics.
+  const DIRECTIONS: Array<{
     direction: LayoutOptions['direction'];
     label: string;
     title: string;
   }> = [
-    { engine: 'dagre', direction: 'LR', label: 'D→', title: 'Dagre — left to right' },
-    { engine: 'dagre', direction: 'TB', label: 'D↓', title: 'Dagre — top to bottom' },
-    { engine: 'elk',   direction: 'LR', label: 'E→', title: 'ELK — left to right' },
-    { engine: 'elk',   direction: 'TB', label: 'E↓', title: 'ELK — top to bottom' },
+    { direction: 'LR', label: 'Left → Right', title: 'Lay the graph out left to right' },
+    { direction: 'TB', label: 'Top → Bottom', title: 'Lay the graph out top to bottom' },
   ];
 
-  function isLayoutActive(btn: typeof LAYOUT_BUTTONS[number]) {
-    return layoutOptions.engine === btn.engine && layoutOptions.direction === btn.direction;
+  const ENGINES: Array<{
+    engine: LayoutOptions['engine'];
+    label: string;
+    title: string;
+  }> = [
+    { engine: 'elk', label: 'ELK', title: 'ELK layered layout engine' },
+    { engine: 'dagre', label: 'Dagre', title: 'Dagre layout engine' },
+  ];
+
+  function selectDirection(direction: LayoutOptions['direction']) {
+    if (layoutLoading || layoutOptions.direction === direction) return;
+    onlayoutselect({ engine: layoutOptions.engine, direction });
+  }
+
+  function selectEngine(engine: LayoutOptions['engine']) {
+    if (layoutLoading || layoutOptions.engine === engine) return;
+    onlayoutselect({ engine, direction: layoutOptions.direction });
   }
 </script>
 
 <div class="controls-panel" role="toolbar" aria-label="Canvas controls">
-  <!-- Row 1: zoom in | zoom out -->
+  <!-- View -->
   <button
     class="ctrl-btn"
     title="Zoom in"
@@ -89,8 +106,6 @@
       <path d="M0 0h32v4.2H0z" />
     </svg>
   </button>
-
-  <!-- Row 2: fit view | lock -->
   <button
     class="ctrl-btn"
     title="Fit view"
@@ -109,21 +124,18 @@
     onclick={toggleInteractivity}
   >
     {#if isInteractive}
-      <!-- Unlock icon -->
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 25 32" class="icon">
         <path d="M21.333 10.667H19.81V7.619C19.81 3.429 16.38 0 12.19 0c-4.114 1.828-1.37 2.133.305 2.438 1.676.305 4.42 2.59 4.42 5.181v3.048H3.047A3.056 3.056 0 000 13.714v15.238A3.056 3.056 0 003.048 32h18.285a3.056 3.056 0 003.048-3.048V13.714a3.056 3.056 0 00-3.048-3.047zM12.19 24.533a3.056 3.056 0 01-3.047-3.047 3.056 3.056 0 013.047-3.048 3.056 3.056 0 013.048 3.048 3.056 3.056 0 01-3.048 3.047z" />
       </svg>
     {:else}
-      <!-- Lock icon -->
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 25 32" class="icon">
         <path d="M21.333 10.667H19.81V7.619C19.81 3.429 16.38 0 12.19 0 8 0 4.571 3.429 4.571 7.619v3.048H3.048A3.056 3.056 0 000 13.714v15.238A3.056 3.056 0 003.048 32h18.285a3.056 3.056 0 003.048-3.048V13.714a3.056 3.056 0 00-3.048-3.047zM12.19 24.533a3.056 3.056 0 01-3.047-3.047 3.056 3.056 0 013.047-3.048 3.056 3.056 0 013.048 3.048 3.056 3.056 0 01-3.048 3.047zm4.724-13.866H7.467V7.619c0-2.59 2.133-4.724 4.723-4.724 2.591 0 4.724 2.133 4.724 4.724v3.048z" />
       </svg>
     {/if}
   </button>
 
-  <!-- Phase B / B1: geometry-density controls.
-       Collapse All / Expand All are content mutations (viewport-preserving);
-       Fit Collapsed is the one explicit fit among them. -->
+  <!-- Geometry density. Collapse All / Expand All are content mutations
+       (viewport-preserving); Fit Collapsed is the one explicit fit among them. -->
   <button
     class="ctrl-btn ctrl-btn-glyph"
     title="Collapse all tables"
@@ -147,23 +159,41 @@
     aria-label="Fit collapsed"
     onclick={onfitcollapsed}
   >
-    ⤢ fit collapsed
+    ⤢ Fit collapsed
   </button>
 
-  <!-- Rows: layout buttons -->
-  {#each LAYOUT_BUTTONS as btn (btn.engine + btn.direction)}
+  <!-- Layout: direction (primary) and engine (secondary) as labelled axes. -->
+  <div class="ctrl-caption">Layout direction</div>
+  {#each DIRECTIONS as d (d.direction)}
     <button
-      class="ctrl-btn ctrl-btn-layout"
-      class:active={isLayoutActive(btn)}
-      title={btn.title}
+      class="ctrl-btn ctrl-btn-label"
+      class:active={layoutOptions.direction === d.direction}
+      title={d.title}
+      aria-label={`Layout direction: ${d.label}`}
+      aria-pressed={layoutOptions.direction === d.direction}
       disabled={layoutLoading}
-      onclick={() => onlayoutselect({ engine: btn.engine, direction: btn.direction })}
+      onclick={() => selectDirection(d.direction)}
     >
-      {#if layoutLoading && isLayoutActive(btn)}
+      {#if layoutLoading && layoutOptions.direction === d.direction}
         <span class="ctrl-spin">⟳</span>
       {:else}
-        {btn.label}
+        {d.label}
       {/if}
+    </button>
+  {/each}
+
+  <div class="ctrl-caption">Engine</div>
+  {#each ENGINES as e (e.engine)}
+    <button
+      class="ctrl-btn ctrl-btn-label"
+      class:active={layoutOptions.engine === e.engine}
+      title={e.title}
+      aria-label={`Layout engine: ${e.label}`}
+      aria-pressed={layoutOptions.engine === e.engine}
+      disabled={layoutLoading}
+      onclick={() => selectEngine(e.engine)}
+    >
+      {e.label}
     </button>
   {/each}
 </div>
@@ -176,20 +206,21 @@
     z-index: 5;
     display: grid;
     grid-template-columns: 1fr 1fr;
+    width: 188px;
     gap: 1px;
     background: var(--xy-controls-button-border-color, #eee);
     border: 1px solid var(--xy-controls-button-border-color, #eee);
     border-radius: 4px;
     overflow: hidden;
-    box-shadow: var(--xy-controls-box-shadow, 0 1px 4px rgba(0,0,0,0.12));
+    box-shadow: var(--xy-controls-box-shadow, 0 1px 4px rgba(0, 0, 0, 0.12));
   }
 
   .ctrl-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 26px;
-    height: 26px;
+    width: 100%;
+    height: 28px;
     background: var(--xy-controls-button-background-color, #fefefe);
     color: var(--xy-controls-button-color, #222);
     border: none;
@@ -215,17 +246,37 @@
     color: var(--erd-controls-active-fg, #fff);
   }
 
-  /* Phase B density controls: wider glyph / label buttons */
+  /* Wider glyph / labelled rows */
   .ctrl-btn-glyph {
     font-size: 14px;
     font-family: ui-sans-serif, system-ui, sans-serif;
   }
 
+  .ctrl-btn-label {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 0 6px;
+    white-space: nowrap;
+  }
+
   .ctrl-btn.span-2 {
     grid-column: span 2;
     width: auto;
-    font-size: 10px;
-    white-space: nowrap;
+  }
+
+  /* Small section caption, spanning both columns. */
+  .ctrl-caption {
+    grid-column: span 2;
+    padding: 5px 7px 3px;
+    background: var(--xy-controls-button-background-color, #fefefe);
+    color: #6b7280;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 8px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    text-align: left;
   }
 
   .icon {

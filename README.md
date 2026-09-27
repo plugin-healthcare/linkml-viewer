@@ -119,12 +119,15 @@ src-tauri/
 - Drag-and-drop upload of any `.yaml` / `.yml` LinkML schema (reconciled through the producer service)
 - **Schema YAML editor** — live CodeMirror 6 editor with syntax highlighting; edits are validated for YAML syntax and re-reconciled through the producer service (500ms debounce). It does not parse LinkML in the browser.
 - **In-browser group color editor** — edit group labels and colors live without touching any files
-- Auto-layout via [Dagre](https://github.com/dagrejs/dagre) or [ELK](https://eclipse.dev/elk/) (layered algorithm), switchable at runtime
+- Auto-layout via [Dagre](https://github.com/dagrejs/dagre) or [ELK](https://eclipse.dev/elk/) (layered algorithm), switchable at runtime — controls are labelled by intent (*Left → Right* / *Top → Bottom*) with the engine (*ELK* / *Dagre*) as a secondary axis
 - Left-side **group legend** sidebar — shown automatically when the schema has group-annotated classes; lists color swatches, slot row icon key, and edge type legend
 - **Group-colored node headers** — each class's header is colored by its group annotation (configured in `static/group-config.yaml`)
 - **ETL mapping badges** — slots with `exact_mappings` show the target column as an indigo italic badge, with the full mapping list on hover
 - **ETL edges** — dashed indigo arrows drawn to the mapping's named target column (e.g. HiX → OMOP)
-- Collapsible table nodes (click the header)
+- Collapsible table nodes (click the chevron in the header); clicking the header itself selects the table
+- **Selection semantics** — the chosen table/row is *selected*, its neighbours *related*, the rest *dimmed*; collapse (the chevron) is a distinct affordance and never changes the selection
+- **Relationship labels** — the inspected (selected/hovered) relationship shows its slot name at a stable screen size; below LOD2 the full static label set is suppressed
+- **Examples menu** — switch between the bundled example schemas (OMOP CDM, SEIN) with a LinkML → ERD vocabulary note: *Class → Table · Slot → Column · Range → related table*
 - Top-bar search with keyboard navigation and canvas pan-to-node
 - MiniMap with group-aware node coloring
 

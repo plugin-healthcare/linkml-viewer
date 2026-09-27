@@ -19,6 +19,7 @@
   import SchemaEditor from '$lib/components/SchemaEditor.svelte';
   import GroupEditor from '$lib/components/GroupEditor.svelte';
   import FileList from '$lib/components/FileList.svelte';
+  import ExampleMenu from '$lib/components/ExampleMenu.svelte';
 
   import {
     assignFileIds,
@@ -118,6 +119,12 @@
   const lodCtx = $state<{ level: number }>({ level: 2 });
   setContext('lodLevel', lodCtx);
 
+  // R2.8.8 — the relationship currently under the pointer. Hover inspection:
+  // below LOD2 the overlay renders this edge's label at a stable screen size,
+  // so any relationship can be read without zooming in. Transient presentation
+  // state; never written into the graph, layout, or selection.
+  let hoveredEdgeId = $state<string | null>(null);
+
   // ---------------------------------------------------------------------------
   // Native selection holder — the single place Svelte Flow's own selection is
   // surfaced. FlowController calls useOnSelectionChange and writes the selected
@@ -138,6 +145,8 @@
   // ---------------------------------------------------------------------------
   const focusCtx = $state<RelationshipFocus>({
     active: NO_FOCUS.active,
+    selectedTableIds: NO_FOCUS.selectedTableIds,
+    selectedNodeIds: NO_FOCUS.selectedNodeIds,
     tableIds: NO_FOCUS.tableIds,
     edgeIds: NO_FOCUS.edgeIds,
     strongEdgeIds: NO_FOCUS.strongEdgeIds,
@@ -325,6 +334,22 @@
   const groupList = $derived<GroupInfo[]>(
     groupCtx.map ? Array.from(groupCtx.map.values()) : []
   );
+
+  // Stem of the active bundled example (null for an uploaded/edited file), so the
+  // Examples menu can mark the current one. R2.8.9.
+  const activeStem = $derived(
+    workspaceFiles.find((f) => f.id === activeFileId)?.stem ?? null
+  );
+
+  // Load a bundled example schema through the same path as the default (R2.8.9).
+  async function handleLoadExample(stem: string) {
+    loadError = '';
+    try {
+      await loadBundledSchema(stem);
+    } catch (e) {
+      loadError = `Failed to load example '${stem}': ${(e as Error).message}`;
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Rebuild graph whenever schema, collapsed, or layoutOptions change (async)
@@ -660,10 +685,26 @@ onMount(() => {
   (globalThis as Record<string, unknown>).__erdFocus = {
     get: () => ({
       active: focusCtx.active,
+      selectedTableIds: [...focusCtx.selectedTableIds],
+      selectedNodeIds: [...focusCtx.selectedNodeIds],
       tableIds: [...focusCtx.tableIds],
       edgeIds: [...focusCtx.edgeIds],
       strongEdgeIds: [...focusCtx.strongEdgeIds],
     }),
+  };
+  // Dev-only seam exposing the materialised relationship facts (kind / endpoint
+  // node ids / slot), so tests can assert that collapse/expand changes only the
+  // presentation anchor and never the reconciled relationship data. Reads the
+  // layout `edges` source, not the presentation `displayEdges`.
+  (globalThis as Record<string, unknown>).__erdEdges = {
+    get: () =>
+      edges.map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        kind: (e.data as unknown as { edgeKind?: string } | undefined)?.edgeKind ?? null,
+        slot: (e.data as unknown as { slotName?: string } | undefined)?.slotName ?? null,
+      })),
   };
   // Dev-only seam to load a bundled schema by stem, so edge-focus tests can
   // exercise an ETL-bearing graph (OMOP has zero ETL relationships) through the
@@ -736,6 +777,8 @@ onMount(() => {
   // Publish the derived focus to the context holder read by node components.
   $effect(() => {
     focusCtx.active = relationshipFocus.active;
+    focusCtx.selectedTableIds = relationshipFocus.selectedTableIds;
+    focusCtx.selectedNodeIds = relationshipFocus.selectedNodeIds;
     focusCtx.tableIds = relationshipFocus.tableIds;
     focusCtx.edgeIds = relationshipFocus.edgeIds;
     focusCtx.strongEdgeIds = relationshipFocus.strongEdgeIds;
@@ -750,10 +793,7 @@ onMount(() => {
   // at a fixed screen size instead. Selection swaps the label *surface*, it
   // does not reconstruct relationship semantics.
   const displayEdges = $derived(
-    applyEdgeFocus(
-      applyEdgeLod(edges, lodCtx.level, relationshipFocus.strongEdgeIds),
-      relationshipFocus
-    )
+    applyEdgeFocus(applyEdgeLod(edges, lodCtx.level), relationshipFocus)
   );
 </script>
 
@@ -833,6 +873,8 @@ onMount(() => {
             onreset={loadDefault}
           />
         </div>
+
+        <ExampleMenu {activeStem} loading={layoutLoading} onload={handleLoadExample} />
       </div>
     </div>
 
@@ -881,6 +923,10 @@ onMount(() => {
             deleteKey={null}
             elevateEdgesOnSelect={true}
             proOptions={{ hideAttribution: false }}
+            onedgepointerenter={({ edge }) => { hoveredEdgeId = edge.id; }}
+            onedgepointerleave={({ edge }) => {
+              if (hoveredEdgeId === edge.id) hoveredEdgeId = null;
+            }}
           >
             <FlowController
               bind:this={flowController}
@@ -893,6 +939,7 @@ onMount(() => {
             <EdgeLabelOverlay
               {edges}
               strongEdgeIds={focusCtx.strongEdgeIds}
+              {hoveredEdgeId}
               level={lodCtx.level}
             />
             <CustomControls

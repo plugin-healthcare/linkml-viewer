@@ -245,3 +245,33 @@ test('selection changes no geometry or viewport', async ({ page }) => {
   const after = await geometry(page);
   expect(after).toEqual(before);
 });
+
+// 10 — R2.8.8 hover inspection: below LOD2 there are no static labels, but the
+// relationship under the pointer renders its label at a readable screen size.
+test('hovering a relationship reveals its label below LOD2, leaving hides it', async ({
+  page,
+}) => {
+  await setViewport(page, { x: 0, y: 0, zoom: 0.6 }); // LOD1
+  await expect(page.locator('.svelte-flow__edge-label')).toHaveCount(0);
+  await expect(page.locator('.erd-edge-label')).toHaveCount(0);
+
+  const edgeId = await firstFkEdgeId(page);
+  expect(edgeId).not.toBe('');
+
+  const pointer = (type: string, id: string) =>
+    page.evaluate(
+      ([t, i]) => {
+        const groups = [...document.querySelectorAll('.svelte-flow__edge')];
+        const el = groups.find((g) => g.getAttribute('data-id') === i);
+        el?.dispatchEvent(new PointerEvent(t, { bubbles: true }));
+      },
+      [type, id] as const
+    );
+
+  await pointer('pointerenter', edgeId);
+  const label = await waitScreenLabel(page, edgeId);
+  expect(label.height).toBeGreaterThanOrEqual(11);
+
+  await pointer('pointerleave', edgeId);
+  await expect(page.locator('.erd-edge-label')).toHaveCount(0);
+});

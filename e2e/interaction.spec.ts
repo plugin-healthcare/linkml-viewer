@@ -28,7 +28,7 @@ test('collapse preserves viewport', async ({ page }) => {
 
   // dispatchEvent, not click(): collapsing replaces the node elements, and a
   // normal click would be retried by Playwright against a detached element.
-  await tableNode(page, 'person').locator('.header').dispatchEvent('click');
+  await tableNode(page, 'person').locator('.collapse-toggle').dispatchEvent('click');
   // Column children must disappear (collapse actually happened).
   await expect(page.locator('.svelte-flow__node-column[data-id^="person"]')).toHaveCount(0);
   await page.waitForTimeout(900);
@@ -151,7 +151,7 @@ test('user pan during async layout is preserved', async ({ page }) => {
   });
 
   // Start a content rebuild (capture A = {0,0,0.6}).
-  await tableNode(page, 'person').locator('.header').dispatchEvent('click');
+  await tableNode(page, 'person').locator('.collapse-toggle').dispatchEvent('click');
   await page.waitForTimeout(150);
 
   // Simulate the user moving the viewport to B while the layout is running.

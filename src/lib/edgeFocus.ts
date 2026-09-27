@@ -25,6 +25,8 @@ import type { RelationshipFocus } from './types';
 
 export const NO_FOCUS: RelationshipFocus = {
   active: false,
+  selectedTableIds: new Set(),
+  selectedNodeIds: new Set(),
   tableIds: new Set(),
   edgeIds: new Set(),
   strongEdgeIds: new Set(),
@@ -58,6 +60,13 @@ export function tableIdOf(nodeId: string): string {
  *
  * Edge precedence applies whenever any edge is selected, so it is consistent
  * with the R2.4.2 single-edge contract.
+ *
+ * Three presentation states are distinguished (R2.8.7):
+ *
+ *   SELECTED  the object the user explicitly chose — `selectedTableIds` /
+ *             `selectedNodeIds` (exact native selection).
+ *   RELATED   connected to a selected object — `tableIds` minus the selected.
+ *   DIMMED    everything else while focus is active.
  */
 export function deriveRelationshipFocus(
   renderedEdges: Edge[],
@@ -78,10 +87,22 @@ export function deriveRelationshipFocus(
       tableIds.add(tableIdOf(edge.source));
       tableIds.add(tableIdOf(edge.target));
     }
-    return { active: true, tableIds, edgeIds, strongEdgeIds };
+    // Edge-selected focus chooses a *relationship*: its endpoints are related,
+    // not selected — no table carries the `selected` treatment here.
+    return {
+      active: true,
+      selectedTableIds: new Set(),
+      selectedNodeIds: new Set(),
+      tableIds,
+      edgeIds,
+      strongEdgeIds,
+    };
   }
 
-  // Table-selected focus (R2.4.1) — unchanged.
+  // Table-selected focus (R2.4.1). `selectedNodes` is the exact native
+  // selection; `selectedTables` maps each to its owning table, so a selected
+  // column row marks its parent table selected.
+  const selectedNodes = new Set(selectedNodeIds);
   const selectedTables = new Set(selectedNodeIds.map(tableIdOf));
   const edgeIds = new Set<string>();
 
@@ -98,7 +119,14 @@ export function deriveRelationshipFocus(
     tableIds.add(tableIdOf(edge.target));
   }
 
-  return { active: true, tableIds, edgeIds, strongEdgeIds: new Set() };
+  return {
+    active: true,
+    selectedTableIds: selectedTables,
+    selectedNodeIds: selectedNodes,
+    tableIds,
+    edgeIds,
+    strongEdgeIds: new Set(),
+  };
 }
 
 function withFocusClass(edge: Edge, focusClass: string, selected: boolean): Edge {

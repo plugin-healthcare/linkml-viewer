@@ -79,6 +79,12 @@
       <span class="legend-mapping">Table.col</span>
       <span class="legend-text">ETL mapping</span>
     </div>
+
+    <div class="legend-subtitle">Edges</div>
+    <div class="legend-row">
+      <span class="edge-fk"></span>
+      <span class="legend-text">FK edge</span>
+    </div>
     <div class="legend-row">
       <span class="edge-etl"></span>
       <span class="legend-text">ETL edge</span>
@@ -164,6 +170,16 @@
     color: #6b7280;
   }
 
+  /* Sub-group label inside the Legend section (e.g. the edge kinds). */
+  .legend-subtitle {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #6b7280;
+    margin-top: 4px;
+  }
+
   /* Slot badges — mirrors ColumnNode.svelte exactly */
   .badge {
     font-size: 8px;
@@ -202,6 +218,15 @@
     font-style: italic;
     font-family: ui-monospace, monospace;
   }
+  /* FK edge swatch — solid slate line (mirrors the canvas FK stroke) */
+  .edge-fk {
+    display: inline-block;
+    width: 28px;
+    height: 0;
+    border-top: 2px solid var(--erd-edge-fk);
+    flex-shrink: 0;
+  }
+
   /* ETL edge swatch — dashed indigo line */
   .edge-etl {
     display: inline-block;

@@ -1,24 +1,21 @@
 /**
- * Phase B / B2 experiment — edge annotation density (edge LOD).
+ * R2.8.8 — relationship-label readability (edge annotation density).
  *
  * Presentation-only transform over Svelte Flow edges. It changes which labels
  * are rendered in response to the shared LOD level; it never changes edge
  * geometry, direction, markers, or the underlying `edges` source array.
  *
- *   LOD 0  no labels (overview), except a natively selected edge
- *   LOD 1  labels only on required FK edges (structural minimum), plus selected
- *   LOD 2  all `slotName` labels (current behaviour)
+ *   LOD 0 / 1  no static labels
+ *   LOD 2      every `slotName` label (the semantic level: zoomed in enough to
+ *              read the whole graph's relationship names)
  *
- * Selected-edge replacement (R2.6.4.2): an edge whose id is in
- * `overlayLabelIds` (the derived `relationshipFocus.strongEdgeIds`, i.e.
- * natively selected) has its already-materialised `label` suppressed through
- * the transform below LOD2. The readable replacement is rendered in screen
- * space by `EdgeLabelOverlay.svelte`, so keeping the tiny zoom-coupled label
- * here would double-render it. This is not new relationship semantics — the
- * label already exists on the reconciled edge; only presentation-state
- * selection swaps the *rendering surface*. It never reconstructs a target slot
- * or an ETL mapping, and it adds no field. The underlying `edges` source array
- * is never mutated.
+ * Rationale (R2.8.8): the previous LOD1 "required-FK only" band rendered a
+ * subset of midpoint labels at exactly the zoom where long orthogonal paths run
+ * through empty space, so they floated detached and overlapped. Relationship
+ * identity is now a property of the *inspected* relationship: below LOD2 the
+ * selected/hovered edge's existing `edge.label` is rendered at a stable screen
+ * size by `EdgeLabelOverlay.svelte`; everything else stays unlabelled. LOD2
+ * restores the full static set, where the zoom is sufficient to read it.
  *
  * Reversible: delete this file and pass `edges` straight to <SvelteFlow>.
  *
@@ -32,30 +29,14 @@
  */
 import type { Edge } from '@xyflow/svelte';
 
-export function applyEdgeLod(
-  edges: Edge[],
-  level: number,
-  overlayLabelIds?: ReadonlySet<string>
-): Edge[] {
+export function applyEdgeLod(edges: Edge[], level: number): Edge[] {
   // Semantic level: full annotation, same array reference (no re-render).
   if (level >= 2) return edges;
 
+  // Below the semantic level there are no static labels; the overlay owns the
+  // label of the selected/hovered relationship only. Drop the label without
+  // touching geometry/style/data.
   return edges.map((edge) => {
-    const data = edge.data as unknown as
-      | { edgeKind?: string; required?: boolean }
-      | undefined;
-    const isRequiredFk = data?.edgeKind !== 'etl' && data?.required === true;
-
-    // The screen-space overlay owns the selected edge's label below LOD2.
-    if (overlayLabelIds?.has(edge.id)) {
-      const { label: _label, ...rest } = edge;
-      return rest as Edge;
-    }
-
-    // Structural level keeps only the required-FK labels.
-    if (level >= 1 && isRequiredFk) return edge;
-
-    // Drop the label without touching geometry/style/data.
     const { label: _label, ...rest } = edge;
     return rest as Edge;
   });

@@ -7,6 +7,7 @@
   // Handle sides come from Svelte Flow's native node props (declared once in
   // layout.ts), not from a `data` copy.
   let {
+    id,
     data,
     sourcePosition = Position.Bottom,
     targetPosition = Position.Top,
@@ -23,10 +24,16 @@
   // highlighted with its table and dimmed (never hidden) when its table is
   // outside the focused neighbourhood.
   const focusCtx = getContext<RelationshipFocus | null>('relationshipFocus');
-  const isRelated = $derived(
-    focusCtx?.active === true && focusCtx.tableIds.has(rawData.tableId)
+  // Three distinct states (R2.8.7): the clicked row is SELECTED (exact node id);
+  // rows of the selected table (and of connected tables) are RELATED; the rest
+  // are DIMMED while focus is active.
+  const isSelected = $derived(
+    focusCtx?.active === true && focusCtx.selectedNodeIds.has(id)
   );
-  const isDimmed = $derived(focusCtx?.active === true && !isRelated);
+  const isRelated = $derived(
+    focusCtx?.active === true && !isSelected && focusCtx.tableIds.has(rawData.tableId)
+  );
+  const isDimmed = $derived(focusCtx?.active === true && !isSelected && !isRelated);
 
   const showBadge = $derived(lod >= 1);   // PK/FK marker
   const showType = $derived(lod >= 2);    // range ("integer", "Concept", …)
@@ -63,6 +70,7 @@
   class:pk={rawData.identifier}
   class:fk={rawData.is_fk && !rawData.identifier}
   class:lod0={lod < 1}
+  class:selected={isSelected}
   class:related={isRelated}
   class:dimmed={isDimmed}
   title={rawData.description || rawData.slotName}
@@ -118,6 +126,18 @@
      prominence; unrelated rows are reduced (not hidden). Presentation only. */
   .col-row.related .slot-name {
     color: #0f172a;
+  }
+
+  /* Selected row (R2.8.7) — the exact column the user chose: a blue row tint
+     with a left accent, distinct from its table's merely-related rows. */
+  .col-row.selected {
+    background: #dbeafe; /* blue-100 */
+    box-shadow: inset 3px 0 0 #1d4ed8;
+  }
+
+  .col-row.selected .slot-name {
+    color: #1e3a8a;
+    font-weight: 600;
   }
 
   .col-row.dimmed {

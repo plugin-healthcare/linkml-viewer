@@ -7,6 +7,7 @@
     type Viewport,
   } from '@xyflow/svelte';
   import { LOD, LOD_ZOOM, type NavDirection } from '$lib/types';
+  import { DEFAULT_CAMERA_MODE, ENTRY_CLASS, ENTRY_ZOOM, type CameraMode } from '$lib/camera';
 
   interface Props {
     panTarget: string | null;  // nodeId to centre on (table or column), or null
@@ -16,6 +17,10 @@
   }
 
   let { panTarget, panNonce, fitRequest, onpanned }: Props = $props();
+
+  // First-load camera mode (R2.8.10). Presentation only; defaults to the
+  // whole-graph overview. The runtime seam below can switch it for comparison.
+  let cameraMode = $state<CameraMode>(DEFAULT_CAMERA_MODE);
 
   const { setCenter, getNode, fitView, getViewport, setViewport } = useSvelteFlow();
   const store = $derived(useStore());
@@ -89,6 +94,20 @@
     const c = centerOf(id);
     if (!c) return;
     setCenter(c.x, c.y, { zoom: getViewport().zoom, duration: 300 });
+  }
+
+  // R2.8.10 first-load camera. `overview` fits the whole graph (default);
+  // `entry` opens on the configured class at a readable zoom. The duration is a
+  // parameter so the initial fit can animate while the seam switches instantly.
+  function applyCamera(mode: CameraMode, duration: number) {
+    if (mode === 'entry') {
+      const c = centerOf(ENTRY_CLASS);
+      if (c) {
+        setCenter(c.x, c.y, { zoom: ENTRY_ZOOM, duration });
+        return;
+      }
+    }
+    fitView({ padding: 0.15, duration });
   }
 
   /**
@@ -197,6 +216,16 @@
       getZoom: () => getViewport().zoom,
       getNodeCenter: (id: string) => centerOf(id),
     };
+    // Camera-mode seam (R2.8.10): compare first-load cameras without committing
+    // the product default. `setMode` applies the camera immediately.
+    (globalThis as Record<string, unknown>).__erdCamera = {
+      getMode: () => cameraMode,
+      setMode: (mode: CameraMode) => {
+        cameraMode = mode;
+        applyCamera(mode, 0);
+      },
+      entryClass: ENTRY_CLASS,
+    };
   });
 
   // Dev-only selection seam: drives *native* Svelte Flow selection deterministically
@@ -248,6 +277,7 @@
   // lets Svelte Flow settle the new node positions before measuring.
   $effect(() => {
     if (fitRequest === 0) return;
-    setTimeout(() => fitView({ padding: 0.15, duration: 400 }), 50);
+    const mode = cameraMode;
+    setTimeout(() => applyCamera(mode, 400), 50);
   });
 </script>

@@ -271,6 +271,20 @@ export type NavDirection = 'left' | 'right' | 'up' | 'down';
 export interface RelationshipFocus {
   /** True when a native node/edge selection exists. */
   active: boolean;
+  /**
+   * Tables the user explicitly chose — a selected table node, or the parent
+   * table of a selected column. Distinct from `tableIds` (which also contains
+   * the selected table's neighbours): a table is `selected` only if it is in
+   * this set, and merely `related` when it is in `tableIds` but not here.
+   * Empty for edge-selected focus (an edge's endpoints are related, not chosen).
+   */
+  selectedTableIds: Set<string>;
+  /**
+   * Natively selected node ids verbatim (table ids and column ids). A column
+   * row is `selected` iff its own node id is in this set, so the precise chosen
+   * row can be styled distinctly from the rest of its table.
+   */
+  selectedNodeIds: Set<string>;
   /** Selected tables plus tables directly connected by a focused edge. */
   tableIds: Set<string>;
   /** Focused edges (connected to a selected table, or natively selected). */

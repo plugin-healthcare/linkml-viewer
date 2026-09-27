@@ -40,12 +40,16 @@
   const isCursor = $derived(cursorCtx?.id === id);
 
   // Relationship focus — derived from native Svelte Flow selection in
-  // +page.svelte. A table is `related` when it is (or is a neighbour of) the
-  // selected table, and `dimmed` when some focus is active but it is not. This
-  // is a fourth transient state, distinct from searchTarget and cursor.
+  // +page.svelte, distinct from searchTarget (search emphasis) and cursor
+  // (keyboard navigation).
   const focusCtx = getContext<RelationshipFocus | null>('relationshipFocus');
-  const isRelated = $derived(focusCtx?.active === true && focusCtx.tableIds.has(id));
-  const isDimmed = $derived(focusCtx?.active === true && !isRelated);
+  // Three distinct states (R2.8.7): SELECTED is the object the user chose;
+  // RELATED is connected to it; DIMMED is everything else while focus is active.
+  const isSelected = $derived(focusCtx?.active === true && focusCtx.selectedTableIds.has(id));
+  const isRelated = $derived(
+    focusCtx?.active === true && !isSelected && focusCtx.tableIds.has(id)
+  );
+  const isDimmed = $derived(focusCtx?.active === true && !isSelected && !isRelated);
 
   const DEFAULT_COLOR = '#475569';
   const DEFAULT_TEXT = '#ffffff';
@@ -78,11 +82,10 @@
   // ---------------------------------------------------------------------------
   const collapsed = $derived(rawData.collapsed);
 
-  // Collapse and selection are separate affordances: the header button toggles
-  // collapse only. Stopping propagation keeps a header click from also being
-  // read as a node selection by Svelte Flow — selection is achieved through the
-  // node surface (clicking a column row selects that column, which maps to this
-  // table for relationship focus) or the native selection seam.
+  // Collapse and selection are separate affordances (R2.8.7): the chevron
+  // button toggles collapse, while the header selects the table. Stopping
+  // propagation keeps a chevron click from also being read as a node selection
+  // (or a drag) by Svelte Flow, so collapsing never changes the selection.
   function toggleCollapse(e: MouseEvent) {
     e.stopPropagation();
     collapseCtx?.toggle(id);
@@ -105,17 +108,19 @@
   class:collapsed
   class:highlighted={highlighted}
   class:cursor={isCursor}
+  class:selected={isSelected}
   class:related={isRelated}
   class:dimmed={isDimmed}
 >
-  <button
+  <!-- The header is the table's selection surface: a click selects the table
+       node natively. Collapsing is a distinct control — the chevron button —
+       so "select" and "collapse" never share a target. -->
+  <div
     class="header"
     style:background={headerColor}
     style:color={headerText}
     style:padding-left={stripeColor ? '16px' : '10px'}
-    onclick={toggleCollapse}
     title={rawData.description || rawData.label}
-    aria-expanded={!collapsed}
   >
     {#if stripeColor}
       <span class="file-stripe" style:background={stripeColor}></span>
@@ -124,8 +129,17 @@
     <span class="slot-count" style:color={headerText}>
       {rawData.slotCount} col{rawData.slotCount !== 1 ? 's' : ''}
     </span>
-    <span class="collapse-icon">{collapsed ? '▶' : '▼'}</span>
-  </button>
+    <button
+      class="collapse-toggle"
+      onclick={toggleCollapse}
+      onpointerdown={(e) => e.stopPropagation()}
+      aria-expanded={!collapsed}
+      aria-label={collapsed ? `Expand ${rawData.label}` : `Collapse ${rawData.label}`}
+      title={collapsed ? 'Expand table' : 'Collapse table'}
+    >
+      <span class="collapse-icon">{collapsed ? '▶' : '▼'}</span>
+    </button>
+  </div>
 </div>
 
 <style>
@@ -159,6 +173,13 @@
     outline-offset: 2px;
   }
 
+  /* Selected (R2.8.7) — the table the user explicitly chose. Strongest state:
+     a blue ring, clearly stronger than the slate `related` ring below. */
+  .table-parent.selected {
+    border-color: #1d4ed8;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.5), 0 2px 8px rgba(29, 78, 216, 0.22);
+  }
+
   /* Relationship focus (R2.4.1) — modest emphasis for the selected table and
      its neighbours; reduced prominence (not hidden) for everything else. No
      movement, no geometry change, no animation. */
@@ -171,7 +192,8 @@
     opacity: 0.4;
   }
 
-  /* Header */
+  /* Header — the table's selection surface (a plain element; a click selects
+     the node natively). `cursor: pointer` signals "clickable". */
   .header {
     display: flex;
     align-items: center;
@@ -186,6 +208,35 @@
     gap: 6px;
     position: relative;
     box-sizing: border-box;
+  }
+
+  /* Collapse control — the only collapse affordance, distinct from selection.
+     Stops propagation so toggling never selects (or drags) the table. */
+  .collapse-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    opacity: 0.75;
+  }
+
+  .collapse-toggle:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  .collapse-toggle:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 1px;
+    opacity: 1;
   }
 
   /* File source stripe — 6px left edge, absolutely positioned */

@@ -127,9 +127,9 @@ plugin-link/
         ├── types.ts              # all shared TypeScript interfaces (ErdClass, ErdTableNodeData, ErdColumnNodeData, FileInfo, GroupInfo, …)
         ├── linkml.ts             # artefact transport: projectReconciledArtifact(), reconcileWorkspace(), loadReconciledArtifact(), loadGroupConfig()
         ├── layout.ts             # async buildGraph(schema, collapsed, LayoutOptions) — dagre + elk
-        ├── edgeLod.ts            # presentation-only edge-label density transform (LOD)
+        ├── edgeLod.ts            # presentation-only label transform: no static labels below LOD2 (R2.8.8)
         └── components/
-            ├── CustomControls.svelte  # bottom-left controls: zoom/fit/lock + layout buttons (2×4 grid)
+            ├── CustomControls.svelte  # bottom-left controls: zoom/fit/lock + intent-labelled layout axes
             ├── FileList.svelte        # left sidebar: workspace file list with import badges + context menu
             ├── FlowController.svelte  # useSvelteFlow() context — pan/highlight/fitView
             ├── GroupEditor.svelte     # right panel: group color-picker form (live updates)
@@ -371,10 +371,11 @@ The ERD uses a Svelte Flow **subflow**: each class is a `tableParent` node whose
 
 ### `TableParentNode.svelte` (type: `tableParent`)
 
-- Renders the table card header only: a **group-colored `<button class="header">`** with the class name, slot count, and collapse chevron. Column child nodes are positioned inside this parent by Svelte Flow.
+- Renders the table card header only: a group-colored `.header` element with the class name, slot count, and a distinct **collapse control** (`<button class="collapse-toggle">` chevron). Column child nodes are positioned inside this parent by Svelte Flow.
+- **Selection vs collapse are separate affordances (R2.8.7).** The `.header` is the table's selection surface — a click selects the table node natively. The chevron `.collapse-toggle` is the *only* collapse affordance; it stops propagation (and pointerdown) so toggling never selects or drags the table. The header is therefore a plain element, not a button, and `aria-expanded`/`aria-label` live on the toggle button.
 - Header color and text color are `$derived` from `groupCtx.map` read via `getContext('groupConfig')`. Updates reactively once the group config fetch resolves.
-- **File stripe**: in multi-file workspaces (`fileCtx.map.size > 1`), a 6px colored left stripe is rendered inside the header button via `position: absolute; left: 0; top: 0; bottom: 0; width: 6px`. The color comes from `fileCtx.map` (keyed by `ErdTableNodeData.fileId`). When only one file is loaded the stripe is hidden. Header `padding-left` is `16px` when a stripe is shown, `10px` otherwise.
-- Click the header (or press Enter/Space while it is DOM-focused) to toggle collapse via the `collapseToggle` context — native button activation, no separate key handler.
+- **File stripe**: in multi-file workspaces (`fileCtx.map.size > 1`), a 6px colored left stripe is rendered inside the header via `position: absolute; left: 0; top: 0; bottom: 0; width: 6px`. The color comes from `fileCtx.map` (keyed by `ErdTableNodeData.fileId`). When only one file is loaded the stripe is hidden. Header `padding-left` is `16px` when a stripe is shown, `10px` otherwise.
+- **Three-state focus** (R2.8.7): `selected` (§ the chosen object — `focusCtx.selectedTableIds`), `related` (connected to it — `focusCtx.tableIds`), `dimmed` (everything else while focus is active). The selected state is distinct from the related state, so the chosen object is no longer indistinguishable from its neighbourhood.
 - **Search highlight** and **keyboard cursor** are derived from the `searchTarget`/`cursor` contexts (`highlighted`/`cursor` classes); they are never written back into the node array.
 - **Read-only geometry**: parent nodes stay draggable (moving a whole table is a coherent canvas affordance); child column nodes are `draggable: false` because rows are schema data, not free-form positions.
 
@@ -413,7 +414,8 @@ Replaces the built-in `<Controls>` component from `@xyflow/svelte` entirely.
 
 - Uses `useSvelteFlow()` for `zoomIn`, `zoomOut`, `fitView` (must be inside `<SvelteFlow>` subtree).
 - Uses `useStore()` directly to toggle the lock state (`store.nodesDraggable`, `store.elementsSelectable`). Connectability is permanently disabled at the `<SvelteFlow>` level (`nodesConnectable={false}`) and is deliberately *not* re-enabled by the lock.
-- 2-column CSS grid layout: Row 1: zoom+/zoom−, Row 2: fit view/lock toggle, Rows 3–4: D→/D↓/E→/E↓ layout buttons.
+- 2-column CSS grid layout: Row 1: zoom+/zoom−, Row 2: fit view/lock toggle, then collapse-all/expand-all + Fit collapsed, then the layout axes.
+- **Layout is two orthogonal, intent-labelled axes (R2.8.11)**, not engine-initials glyphs. Direction is primary (`Left → Right` / `Top → Bottom`); the engine is secondary (`ELK` / `Dagre`). Selecting either axis calls `onlayoutselect` with the resulting `{ engine, direction }` and preserves the other axis. Buttons expose `aria-label` (`Layout direction: …` / `Layout engine: …`) and `aria-pressed`; the spinner/disabled state covers both axes while a layout is running.
 - Inline SVG icons mirrored from the `@xyflow/svelte` built-in Controls source.
 - Positioned absolutely at `bottom: 24px; left: 12px`, matching the original Controls placement.
 
@@ -547,6 +549,24 @@ Under launchd the process PATH is minimal (`/usr/bin:/bin:/usr/sbin:/sbin`), so 
 
 ---
 
+## First-load camera (R2.8.10)
+
+The first-load camera is an explicit **presentation/product** choice, never a
+semantic one: the producer emits no notion of an "important" class, and the
+viewer infers none. `src/lib/camera.ts` owns the single configured authority:
+
+- `ENTRY_CLASS` — the class a readable-entry camera opens on (explicit config).
+- `ENTRY_ZOOM` — the readable scale (the `STRUCTURAL` LOD floor).
+- `DEFAULT_CAMERA_MODE` — `'overview'` (whole-graph fit; the current default,
+  unchanged) or `'entry'` (open on `ENTRY_CLASS` at `ENTRY_ZOOM`).
+
+`FlowController.svelte::applyCamera()` applies the mode on every fit intent;
+the dev-only seam `window.__erdCamera.setMode(mode)` switches it at runtime so
+the modes can be compared without committing the product default. Pinned by
+`e2e/camera.spec.ts`.
+
+---
+
 ## Interaction authority boundary (R2.4.3)
 
 Three interaction authorities coexist without competing. Each capability has
@@ -560,6 +580,8 @@ from the rendered `edges` plus native Svelte Flow selection.
 | Capability | Authority | Source of truth |
 |---|---|---|
 | Pointer selection | Svelte Flow (`elementsSelectable`) | library store |
+| Table selection surface | Table header click → native node selection | Svelte Flow (`elementsSelectable`) |
+| Collapse | `.collapse-toggle` button (stop-propagation) → `collapseCtx` | app collapse authority |
 | Node keyboard focus | **Disabled** (`nodesFocusable={false}`) | app spatial keyboard authority |
 | Edge keyboard focus | **Disabled** (`edgesFocusable={false}`) | app spatial keyboard authority |
 | Arrow navigation | App keyboard authority | `.canvas-area` handler + `cursorCtx` |
@@ -616,7 +638,7 @@ Regression coverage: `e2e/selection-regression.spec.ts`.
 
 ## Known pitfalls
 
-- **One keyboard authority for the graph**: `handleCanvasKeydown` on `.canvas-area` acts only when `e.target === e.currentTarget`. If focus is on a descendant control (e.g. a table header `<button>`), that control owns the keypress and behaves natively; the spatial handler must not also fire. Svelte Flow's own per-node/edge keyboard handlers are turned off (`nodesFocusable={false}`, `edgesFocusable={false}`) so they cannot compete, while its a11y descriptions and live region remain (default `disableKeyboardA11y={false}`).
+- **One keyboard authority for the graph**: `handleCanvasKeydown` on `.canvas-area` acts only when `e.target === e.currentTarget`. If focus is on a descendant control (e.g. the table header's collapse-toggle `<button>`), that control owns the keypress and behaves natively; the spatial handler must not also fire. Svelte Flow's own per-node/edge keyboard handlers are turned off (`nodesFocusable={false}`, `edgesFocusable={false}`) so they cannot compete, while its a11y descriptions and live region remain (default `disableKeyboardA11y={false}`).
 - **The graph is read-only**: `<SvelteFlow>` sets `nodesConnectable={false}` and `deleteKey={null}`; column nodes are `draggable: false`. There is no `edgesReconnectable` prop in `@xyflow/svelte` 1.7.0 — edge reconnection is opt-in via `<EdgeReconnectAnchor>`, which this app never renders.
 - **`useSvelteFlow()` must be called inside a child of `<SvelteFlow>`** — calling it at page-level script scope crashes the app to a blank page. It lives in `FlowController.svelte`.
 - **`setContext` must be called synchronously at component init** — calling it inside `onMount` or inside a `.then()` callback means child components have already called `getContext` and received `undefined`. Always declare the `$state` holder and call `setContext` at the top level of the `<script>` block.

@@ -104,7 +104,7 @@ for (const c of CANDIDATES) {
     const vpBeforeCollapse = await getViewport(page);
     expect(vpBeforeCollapse.zoom).toBeGreaterThan(0);
 
-    await tableNode(page, 'person').locator('.header').dispatchEvent('click');
+    await tableNode(page, 'person').locator('.collapse-toggle').dispatchEvent('click');
     await expect(page.locator('.svelte-flow__node-column[data-id^="person"]')).toHaveCount(0);
     await waitForViewportStable(page);
 
@@ -114,7 +114,7 @@ for (const c of CANDIDATES) {
     expect(Math.abs(vpAfterCollapse.zoom - vpBeforeCollapse.zoom)).toBeLessThan(0.01);
 
     // Re-expand to restore the full graph for the remaining steps.
-    await tableNode(page, 'person').locator('.header').dispatchEvent('click');
+    await tableNode(page, 'person').locator('.collapse-toggle').dispatchEvent('click');
     await expect
       .poll(() => page.locator('.svelte-flow__node-column[data-id^="person"]').count())
       .toBeGreaterThan(0);

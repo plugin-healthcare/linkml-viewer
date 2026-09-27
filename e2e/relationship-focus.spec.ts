@@ -132,17 +132,29 @@ test('selecting a table focuses its relationships without moving geometry', asyn
 });
 
 // ---------------------------------------------------------------------------
-// Test 2 — a header click toggles collapse only; it does not select or focus.
+// Test 2 — selection and collapse are separate affordances (R2.8.7): the header
+// selects the table; the collapse control toggles collapse and preserves the
+// selection.
 // ---------------------------------------------------------------------------
-test('header click collapses without selecting', async ({ page }) => {
+test('header selects the table; the collapse control collapses without selecting', async ({
+  page,
+}) => {
   const columns = page.locator('.svelte-flow__node-column[data-id^="person"]');
   expect(await columns.count()).toBeGreaterThan(0);
 
-  await tableNode(page, 'person').locator('.header').dispatchEvent('click');
-  await expect(columns).toHaveCount(0);
+  // Header click selects the table (native selection); it does not collapse.
+  await tableNode(page, 'person').locator('.header').click();
+  await expect
+    .poll(() => page.evaluate(() => window.__erdSelection.getSelectedNodeIds()))
+    .toContain('person');
+  expect(await columns.count()).toBeGreaterThan(0);
+  expect(await page.evaluate(() => window.__erdFocus.get().active)).toBe(true);
 
-  expect(await page.evaluate(() => window.__erdSelection.getSelectedNodeIds())).toEqual([]);
-  expect((await page.evaluate(() => window.__erdFocus.get())).active).toBe(false);
+  // The collapse control collapses only — the selection is preserved.
+  await tableNode(page, 'person').locator('.collapse-toggle').click();
+  await expect(columns).toHaveCount(0);
+  expect(await page.evaluate(() => window.__erdSelection.getSelectedNodeIds())).toContain('person');
+  expect(await page.evaluate(() => window.__erdFocus.get().active)).toBe(true);
 });
 
 // ---------------------------------------------------------------------------

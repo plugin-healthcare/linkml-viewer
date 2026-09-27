@@ -44,6 +44,8 @@ declare global {
      __erdFocus: {
        get: () => {
          active: boolean;
+         selectedTableIds: string[];
+         selectedNodeIds: string[];
          tableIds: string[];
          edgeIds: string[];
          strongEdgeIds: string[];
@@ -51,6 +53,20 @@ declare global {
      };
      __erdSchema: {
        loadBundled: (stem: string) => Promise<void>;
+     };
+     __erdEdges: {
+       get: () => {
+         id: string;
+         source: string;
+         target: string;
+         kind: string | null;
+         slot: string | null;
+       }[];
+     };
+     __erdCamera: {
+       getMode: () => 'overview' | 'entry';
+       setMode: (mode: 'overview' | 'entry') => void;
+       entryClass: string;
      };
      __erdLayoutDelayMs?: number;
    }
@@ -95,13 +111,25 @@ export async function waitForGraph(page: Page) {
   await waitForViewportStable(page, { settleMs: 300 });
 }
 
-/** Read the live viewport from the DOM transform on `.svelte-flow__viewport`. */
-export async function getViewport(page: Page): Promise<Viewport> {
-  return page.evaluate(() => {
-    const el = document.querySelector('.svelte-flow__viewport') as HTMLElement;
-    const m = new DOMMatrixReadOnly(getComputedStyle(el).transform);
-    return { x: m.e, y: m.f, zoom: m.a };
-  });
+/**
+ * Read the live viewport from the DOM transform on `.svelte-flow__viewport`.
+ *
+ * The viewport element is momentarily absent while a layout rebuild swaps the
+ * flow internals, so read through a short retry rather than assuming it exists
+ * (a bare `getComputedStyle(null)` throws).
+ */
+export async function getViewport(page: Page, attempts = 40): Promise<Viewport> {
+  for (let i = 0; i < attempts; i++) {
+    const vp = await page.evaluate(() => {
+      const el = document.querySelector('.svelte-flow__viewport') as HTMLElement | null;
+      if (!el) return null;
+      const m = new DOMMatrixReadOnly(getComputedStyle(el).transform);
+      return { x: m.e, y: m.f, zoom: m.a };
+    });
+    if (vp) return vp;
+    await page.waitForTimeout(50);
+  }
+  throw new Error('getViewport: .svelte-flow__viewport not found after retries');
 }
 
 /** Deterministically set the viewport via the dev-only seam. */
@@ -325,4 +353,37 @@ export async function setLayout(
     .not.toEqual(before);
   // The fit intent starts 50ms after apply and runs 400ms; wait it out.
   await waitForViewportStable(page);
+}
+
+// ---------------------------------------------------------------------------
+// Materialised relationship facts (dev seam __erdEdges)
+// ---------------------------------------------------------------------------
+
+/** Table id owning a node id: a column id maps to its parent, a table maps to itself. */
+export function tableIdOf(nodeId: string): string {
+  const sep = nodeId.indexOf('\u0000');
+  return sep >= 0 ? nodeId.slice(0, sep) : nodeId;
+}
+
+/**
+ * The reconciled relationship surface the canvas consumes, normalised to a
+ * presentation-independent identity: `kind · sourceTable · targetTable · slot`.
+ * Collapsing a table changes only which node anchors the edge (column id →
+ * table id), so this key set must be invariant across collapse/expand and
+ * direction. `nodeId` fields are read from the layout `edges` source via the
+ * `__erdEdges` dev seam.
+ */
+export async function semanticEdgeKeys(page: Page): Promise<string[]> {
+  const edges = await page.evaluate(() => window.__erdEdges.get());
+  return edges
+    .map(
+      (e) =>
+        `${e.kind ?? '?'}|${tableIdOf(e.source)}|${tableIdOf(e.target)}|${e.slot ?? '?'}`
+    )
+    .sort();
+}
+
+/** Raw materialised edges (for endpoint-anchor assertions). */
+export async function materialisedEdges(page: Page) {
+  return page.evaluate(() => window.__erdEdges.get());
 }

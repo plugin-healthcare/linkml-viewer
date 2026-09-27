@@ -71,30 +71,30 @@ test('enter activates the focused table', async ({ page }) => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 4b — Enter on a focused table header toggles exactly ONCE.
+// Test 4b — Enter on a focused collapse control toggles exactly ONCE.
 //
-// Regression for the keyboard double-toggle: when DOM focus is on a table's
-// header <button>, pressing Enter fires the native button activation AND used
+// Regression for the keyboard double-toggle: when DOM focus is on the collapse
+// control button, pressing Enter fires the native button activation AND used
 // to bubble to the canvas spatial handler (handleCanvasKeydown), collapsing and
 // immediately re-expanding (net no-op). One keypress must mean one toggle.
 // ---------------------------------------------------------------------------
-test('Enter on a focused table header toggles exactly once', async ({ page }) => {
+test('Enter on a focused collapse control toggles exactly once', async ({ page }) => {
   await setCursor(page, 'person');
 
   const columns = page.locator('.svelte-flow__node-column[data-id^="person"]');
   const initial = await columns.count();
   expect(initial).toBeGreaterThan(0);
 
-  const header = tableNode(page, 'person').locator('.header');
-  await header.focus();
-  await expect(header).toBeFocused();
+  const control = tableNode(page, 'person').locator('.collapse-toggle');
+  await control.focus();
+  await expect(control).toBeFocused();
 
   // A single Enter must collapse (0 columns) — a double-toggle would leave them.
   await page.keyboard.press('Enter');
   await expect(columns).toHaveCount(0);
 
   // A second Enter must re-expand to the original count.
-  await tableNode(page, 'person').locator('.header').focus();
+  await tableNode(page, 'person').locator('.collapse-toggle').focus();
   await page.keyboard.press('Enter');
   await expect.poll(() => columns.count()).toBe(initial);
 });
@@ -119,16 +119,16 @@ test('Enter on the focused canvas toggles exactly once', async ({ page }) => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 4d — single authority: Enter acts on the DOM-focused table header, not
-// on a stale keyboard cursor pointing at a *different* table.
+// Test 4d — single authority: Enter acts on the DOM-focused collapse control,
+// not on a stale keyboard cursor pointing at a *different* table.
 //
 // Regression for the two-authority conflict: with the cursor on `person` and
-// DOM focus on `visit_occurrence`'s header button, the canvas spatial handler
+// DOM focus on `visit_occurrence`'s collapse control, the canvas spatial handler
 // used to hijack Enter and collapse `person` while the focused button was
 // ignored (its native activation suppressed). A keypress owned by a focused
 // control must act on that control.
 // ---------------------------------------------------------------------------
-test('Enter acts on the focused table header, not the stale cursor', async ({ page }) => {
+test('Enter acts on the focused collapse control, not the stale cursor', async ({ page }) => {
   await setCursor(page, 'person');
 
   const voColumns = page.locator('.svelte-flow__node-column[data-id^="visit_occurrence"]');
@@ -136,7 +136,7 @@ test('Enter acts on the focused table header, not the stale cursor', async ({ pa
   expect(await voColumns.count()).toBeGreaterThan(0);
   expect(await personColumns.count()).toBeGreaterThan(0);
 
-  await tableNode(page, 'visit_occurrence').locator('.header').focus();
+  await tableNode(page, 'visit_occurrence').locator('.collapse-toggle').focus();
   await page.keyboard.press('Enter');
 
   await expect(voColumns).toHaveCount(0);

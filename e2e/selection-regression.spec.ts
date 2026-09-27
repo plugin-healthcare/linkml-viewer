@@ -138,8 +138,8 @@ test('selected edge renders a screen-stable label below LOD2; deselect restores 
   await expect(page.locator('.erd-edge-label')).toHaveCount(1);
   await expect(page.locator('.svelte-flow__edge-label')).toHaveCount(0);
 
-  // LOD1: the selected edge keeps a readable screen-space label while the
-  // required-FK set renders ordinarily.
+  // LOD1: below the semantic level no static labels render; the selected edge
+  // keeps its readable screen-space label.
   await setViewport(page, { x: 0, y: 0, zoom: 0.6 });
   const lod1Box = await screenLabelFor(page, edgeId);
   expect(lod1Box).not.toBeNull();
@@ -216,7 +216,7 @@ test('node selection survives an unrelated collapse', async ({ page }) => {
   await page.evaluate(() => window.__erdSelection.selectNodes(['person']));
   await expect.poll(() => selectedNodeIds(page)).toEqual(['person']);
 
-  await tableNode(page, 'visit_occurrence').locator('.header').dispatchEvent('click');
+  await tableNode(page, 'visit_occurrence').locator('.collapse-toggle').dispatchEvent('click');
   await page.waitForTimeout(800);
 
   expect(await selectedNodeIds(page)).toEqual(['person']);

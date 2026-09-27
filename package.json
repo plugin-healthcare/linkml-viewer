@@ -12,7 +12,7 @@
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"tauri:dev": "tauri dev",
 		"tauri:build": "tauri build",
-		"test:e2e": "playwright test e2e/interaction.spec.ts e2e/navigation.spec.ts e2e/viewport-contract.spec.ts e2e/relationship-focus.spec.ts e2e/interaction-contract.spec.ts e2e/selection-regression.spec.ts e2e/edge-label-legibility.spec.ts e2e/responsive.spec.ts e2e/theme-contrast.spec.ts e2e/collapsed-edges.spec.ts",
+		"test:e2e": "playwright test e2e/interaction.spec.ts e2e/navigation.spec.ts e2e/viewport-contract.spec.ts e2e/relationship-focus.spec.ts e2e/interaction-contract.spec.ts e2e/selection-regression.spec.ts e2e/edge-label-legibility.spec.ts e2e/responsive.spec.ts e2e/theme-contrast.spec.ts e2e/collapsed-edges.spec.ts e2e/selection-semantics.spec.ts e2e/example-discovery.spec.ts e2e/camera.spec.ts e2e/controls.spec.ts",
 		"bench:layout": "bun run bench-layout.ts",
 		"check:reconcile": "bun run reconcile-check.ts",
 		"test:contract": "node deploy/contract-test.mjs",
