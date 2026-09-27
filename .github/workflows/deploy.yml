@@ -28,16 +28,25 @@ jobs:
           node-version: 22
           cache: npm
 
-      # The build runs the single LinkML producer (produce.py) via the Vite
-      # plugin as `uv run --with linkml==1.11.1 --python 3.12 produce.py --all`.
-      # Provision uv and the pinned Python so the producer step can run on CI.
+      # The producer environment is the repository's locked uv project:
+      # pyproject.toml + uv.lock + .python-version. uv provisions the pinned
+      # Python from .python-version; `--locked` refuses a stale/missing lock, so
+      # CI cannot silently re-resolve a different LinkML toolchain.
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.12'
+          enable-cache: true
+
+      - name: Install locked producer environment
+        run: uv sync --locked
 
       - name: Install dependencies
         run: npm ci
+
+      # Clean-environment proof: two independent environments from the same
+      # lock must yield the same reconciled content for every bundled schema.
+      - name: Verify locked producer determinism
+        run: node deploy/repro-check.mjs
 
       - name: Build
         run: npm run build

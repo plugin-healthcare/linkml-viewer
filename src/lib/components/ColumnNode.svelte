@@ -1,10 +1,16 @@
 <script lang="ts">
   import { getContext } from 'svelte';
-  import { Handle, type NodeProps, type Node } from '@xyflow/svelte';
+  import { Handle, Position, type NodeProps, type Node } from '@xyflow/svelte';
   import type { ErdColumnNodeData, RelationshipFocus } from '$lib/types';
 
   // Accept the base unparameterised NodeProps — re-derive our data shape below.
-  let { data }: NodeProps<Node<Record<string, unknown>>> = $props();
+  // Handle sides come from Svelte Flow's native node props (declared once in
+  // layout.ts), not from a `data` copy.
+  let {
+    data,
+    sourcePosition = Position.Bottom,
+    targetPosition = Position.Top,
+  }: NodeProps<Node<Record<string, unknown>>> = $props();
 
   const rawData = $derived(data as unknown as ErdColumnNodeData);
 
@@ -44,12 +50,12 @@
 </script>
 
 <!-- Handle sides follow the active layout direction: LR/RIGHT → source right,
-     target left; TB/DOWN → source bottom, target top. Resolved in layout.ts and
-     carried on the column node data so the handles stay coherent with the
-     engine's rank direction. Types are fixed (source/target); only the side
-     varies. -->
-<Handle type="source" position={rawData.sourcePosition} />
-<Handle type="target" position={rawData.targetPosition} />
+     target left; TB/DOWN → source bottom, target top. Declared once on the node
+     by layout.ts and read here from the native NodeProps so the handles stay
+     coherent with the engine's rank direction. Types are fixed (source/target);
+     only the side varies. -->
+<Handle type="source" position={sourcePosition} />
+<Handle type="target" position={targetPosition} />
 
 <div
   class="col-row"

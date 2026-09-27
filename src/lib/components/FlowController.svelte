@@ -6,7 +6,7 @@
     useOnSelectionChange,
     type Viewport,
   } from '@xyflow/svelte';
-  import type { NavDirection } from '$lib/types';
+  import { LOD, LOD_ZOOM, type NavDirection } from '$lib/types';
 
   interface Props {
     panTarget: string | null;  // nodeId to centre on (table or column), or null
@@ -49,20 +49,16 @@
     }
   });
 
-  // Level of detail derived from zoom. Thresholds are exact (no hysteresis):
-  // the level is presentation-only and never changes node geometry, so toggling
-  // at a boundary is cheap and chattering is harmless. Deterministic boundaries
+  // Level of detail derived from zoom. The zoom boundaries are owned by the
+  // single authority `LOD_ZOOM` in $lib/types (declared once, documented with
+  // the LOD levels). Thresholds are exact (no hysteresis): the level is
+  // presentation-only and never changes node geometry, so toggling at a
+  // boundary is cheap and chattering is harmless. Deterministic boundaries
   // also make the levels directly testable.
-  //   0 OVERVIEW    zoom < 0.5
-  //   1 STRUCTURAL  0.5 <= zoom < 0.85
-  //   2 SEMANTIC    zoom >= 0.85
-  const LOD_LOWER = 0.5;
-  const LOD_UPPER = 0.85;
-
   function lodForZoom(zoom: number): number {
-    if (zoom < LOD_LOWER) return 0;
-    if (zoom < LOD_UPPER) return 1;
-    return 2;
+    if (zoom < LOD_ZOOM.STRUCTURAL_MIN) return LOD.OVERVIEW;
+    if (zoom < LOD_ZOOM.SEMANTIC_MIN) return LOD.STRUCTURAL;
+    return LOD.SEMANTIC;
   }
 
   $effect(() => {

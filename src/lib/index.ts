@@ -22,7 +22,6 @@ export {
 	extractImports,
 	reconcileWorkspace,
 	RECONCILE_URL,
-	parseWorkspaceFile,
 	describeWorkspaceFile,
 	assignFileIds,
 	assignWorkspaceFileIds,

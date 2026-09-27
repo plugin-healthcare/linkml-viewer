@@ -1,10 +1,19 @@
 <script lang="ts">
   import { getContext } from 'svelte';
-  import type { NodeProps, Node } from '@xyflow/svelte';
+  import { Handle, Position, type NodeProps, type Node } from '@xyflow/svelte';
   import type { ErdTableNodeData, GroupInfo, RelationshipFocus } from '$lib/types';
 
   // Accept the base unparameterised NodeProps — re-derive our data shape below.
-  let { data, id }: NodeProps<Node<Record<string, unknown>>> = $props();
+  // The native handle props come from layout.ts (declared once). A collapsed
+  // table exposes its own handles so its incident edges anchor to the header
+  // instead of being dropped; an expanded table renders none (the column
+  // children own the handles).
+  let {
+    data,
+    id,
+    sourcePosition = Position.Bottom,
+    targetPosition = Position.Top,
+  }: NodeProps<Node<Record<string, unknown>>> = $props();
 
   // Re-derive data reactively so Svelte can track changes when parent rebuilds the node.
   const rawData = $derived(data as unknown as ErdTableNodeData);
@@ -81,8 +90,15 @@
 </script>
 
 <!-- The node itself is the container rendered by Svelte Flow.
-     Column child nodes have the Handles — not the parent.
-     We only render the colored header with the table name and collapse toggle. -->
+     Expanded: the column child nodes own the directional Handles.
+     Collapsed: the columns are gone, so this node exposes its own Handles
+     (sides from the native node props) — otherwise Svelte Flow cannot resolve
+     an edge endpoint that is a bare table id and would drop the edge. -->
+
+{#if collapsed}
+  <Handle type="source" position={sourcePosition} />
+  <Handle type="target" position={targetPosition} />
+{/if}
 
 <div
   class="table-parent"

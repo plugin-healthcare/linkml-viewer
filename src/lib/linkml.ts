@@ -360,11 +360,6 @@ export async function reconcileWorkspace(
 // ---------------------------------------------------------------------------
 
 /** Describe an uploaded YAML file as workspace metadata (js-yaml only). */
-export function parseWorkspaceFile(name: string, text: string): WorkspaceFile {
-  return describeWorkspaceFile(name, text);
-}
-
-/** Alias retained for the workspace ingestion call sites. */
 export function describeWorkspaceFile(name: string, text: string): WorkspaceFile {
   const basename = name.includes('/') ? name.slice(name.lastIndexOf('/') + 1) : name;
   const dotIdx = basename.lastIndexOf('.');

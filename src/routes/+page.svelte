@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, setContext, untrack } from 'svelte';
+  import { onMount, onDestroy, setContext, untrack } from 'svelte';
   import {
     SvelteFlow,
     Background,
@@ -92,7 +92,8 @@
   // ---------------------------------------------------------------------------
   // Search-target context — single authoritative state for the table currently
   // emphasised by a search. This is transient navigation emphasis, distinct
-  // from selection, collapse, and hover (see InteractionState in types.ts).
+  // from selection, collapse, and hover (see the interaction-state contract in
+  // src/lib/types.ts).
   // TableParentNode derives its `highlighted` class from this — the node array
   // is never mutated to carry highlight state.
   // ---------------------------------------------------------------------------
@@ -288,6 +289,10 @@
 
   // Timer that clears the transient search highlight; reset on each new search.
   let searchClearTimer: ReturnType<typeof setTimeout> | undefined;
+  // A pending auto-clear must not outlive the component.
+  onDestroy(() => {
+    if (searchClearTimer !== undefined) clearTimeout(searchClearTimer);
+  });
 
   // Imperative viewport handle supplied by FlowController (inside <SvelteFlow>).
   // $state.raw so bind:this is legal, but reads inside the layout effect are

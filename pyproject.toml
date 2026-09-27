@@ -1,0 +1,28 @@
+# Locked producer environment for plugin-link (linkml-viewer).
+#
+# This is NOT a package: it is the virtual uv project that owns the single
+# LinkML reconciliation authority (`produce.py`). The dependency pin and the
+# committed `uv.lock` are the sole authority for the producer's execution
+# environment; `deploy/producer-runner.mjs` must invoke the producer through
+# this project (`uv run --locked`) and must not re-declare versions itself.
+#
+# Reproducibility contract:
+#   identical repository source state + identical locked environment
+#     -> identical reconciled content (see `reproducibility.content_digest`).
+# The environment identity that produced an artefact is still recorded under
+# `reproducibility` (`python_version`, `linkml_version`, `linkml_runtime_version`)
+# as provenance, reported separately from the content digest.
+
+[project]
+name = "linkml-viewer-producer"
+version = "0.0.0"
+description = "Off-client LinkML reconciliation producer for plugin-link."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "linkml==1.11.1",
+]
+
+[tool.uv]
+# Virtual project: resolve/lock/sync dependencies only; never build or install
+# this project itself.
+package = false

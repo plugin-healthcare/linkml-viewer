@@ -36,13 +36,11 @@ import { tmpdir } from 'node:os';
 
 const REPO_ROOT = import.meta.dir ?? process.cwd();
 
-const UV = [
-	'run',
-	'--with',
-	'linkml==1.11.1',
-	'--python',
-	'3.12'
-] as const;
+// The locked producer project (pyproject.toml + uv.lock + .python-version) is
+// the single environment authority. `--locked` refuses to run against a stale
+// or missing lock, so this observer and the production boundaries all execute
+// the identical pinned toolchain.
+const UV = ['run', '--locked'] as const;
 
 interface Fixture {
 	name: string;

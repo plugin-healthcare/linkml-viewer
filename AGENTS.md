@@ -8,12 +8,15 @@ Summary of the project architecture and key design decisions for AI coding agent
 
 An interactive **Entity Relationship Diagram (ERD) viewer** built with SvelteKit and Svelte Flow. It parses any [LinkML](https://linkml.io) schema (YAML or JSON) and renders the classes as a pannable, zoomable canvas of table nodes connected by foreign-key edges. The default schema is the OMOP CDM v5.4 (fully merged LinkML YAML).
 
-There is no backend. Everything runs in the browser as a static SPA.
+There is no in-browser LinkML runtime. The bundled-schema viewer is a pure client-side SPA, but reconciliation is **not** in the browser: it runs off-client in `produce.py`, either at build time (bundled artefacts) or in a server boundary (`POST /reconcile`) for uploads and hand-edits. The bundled viewer therefore needs no server; the upload/edit feature does.
 
-The project ships two deployment targets from the same SvelteKit frontend:
+The project ships three deployment targets from the same SvelteKit frontend:
 
-- **Web / GitHub Pages** — static SPA built with `@sveltejs/adapter-static`, deployed via `.github/workflows/deploy.yml`.
-- **Desktop (Tauri v2)** — the same static build is wrapped in a native window using [Tauri v2](https://tauri.app). The Tauri shell lives in `src-tauri/` and adds no extra Rust logic beyond the standard app harness. Supports macOS (`.app` / `.dmg`), Windows (`.exe` / `.msi`), and Linux (`.deb` / `.AppImage`).
+- **Web / GitHub Pages** — static SPA built with `@sveltejs/adapter-static`, deployed via `.github/workflows/deploy.yml`. Serves the bundled schemas only (no reconcile endpoint). Base path `/plugin-link`.
+- **Served origin** — the same static build served by `deploy/serve.mjs` under launchd (`com.semiac.linkml-viewer`, `PORT=4180`) behind Cloudflare, which also exposes `POST /linkml-viewer/reconcile` for uploads. Base path `/linkml-viewer`.
+- **Desktop (Tauri v2)** — the same static build is wrapped in a native window using [Tauri v2](https://tauri.app). The Tauri shell lives in `src-tauri/` and adds no extra Rust logic beyond the standard app harness. Supports macOS (`.app` / `.dmg`), Windows (`.exe` / `.msi`), and Linux (`.deb` / `.AppImage`). No in-app reconcile server.
+
+The authoritative mode-by-mode matrix lives in [`README.md`](./README.md#deployment-matrix-authoritative).
 
 ---
 
@@ -47,11 +50,15 @@ in-browser LinkML runtime.
 ## Running the project
 
 ```bash
+uv sync --locked         # materialise the locked producer env (pyproject.toml + uv.lock + .python-version)
 just                    # start web dev server (bun run dev) at http://localhost:5173
 just dev-tauri          # start Tauri desktop dev (wraps Vite dev in a native window)
-bun run build            # production web build → build/
+bun run build            # production web build → build/ (runs `uv run --locked produce.py --all`)
 bun run check            # svelte-check type checking
+bun run test:repro       # clean-environment producer determinism proof
 ```
+
+`uv sync --locked` is optional (any producer boundary runs it implicitly), but it is the explicit way to materialise the locked environment. Every producer invocation goes through `uv run --locked`, so a stale/missing `uv.lock` fails instead of silently re-resolving.
 
 ### Desktop builds
 
@@ -323,10 +330,22 @@ height (36px).
 reads only `kind`, `source`, `target`, `slot`, and the reconciled `target_slot`
 anchor — it never inspects ranges, class-name membership, mapping CURIEs, pk/key
 slots, or self-reference flags. The source column is `(source, slot)`; the target
-column is `(target, target_slot)`. A collapsed target resolves to its table header,
-and a target anchor that names no rendered column falls back to the first column
-(both purely geometric). This is the R1.9 closure of the former viewer-side
+column is `(target, target_slot)`. A collapsed table resolves to the bare table
+id (the relationship remains in the materialised edge set, but the `tableParent`
+renders no `<Handle>`), and a target anchor that names no rendered column falls
+back to the first column. This is the R1.9 closure of the former viewer-side
 `pk_slot` + first-column fallback.
+
+**Collapsed-edge anchoring (R2.8.3).** The directional handles live on the
+column nodes (`LR` → right/left, `TB` → bottom/top), asserted by both
+`bench-layout.ts` and `e2e/collapsed-edges.spec.ts`. When a table collapses its
+columns are gone, so `TableParentNode` exposes its own source/target `<Handle>`
+(from the native node props). Svelte Flow's `getEdgePosition` can then resolve
+the bare-table-id endpoint, so a collapsed table **keeps every incident edge**,
+anchored to its header; expanding restores the original edge-id set exactly.
+Collapse-all likewise preserves the full edge count. Handles on the parent are
+rendered only while collapsed, so expanded tables stay handle-free (the columns
+own them).
 
 Two kinds of edges are produced, discriminated by `kind`:
 
@@ -513,6 +532,8 @@ The viewer-consumed semantic graph is **frozen for layout experimentation**. Eve
 > **Rule.** No Svelte Flow consumer may derive LinkML meaning independently when an applicable authoritative value exists. Consumers project/position/render/search/navigate the reconciled result; they do not reinterpret it.
 
 **Bundled schemas (R1.4).** `static/reconciled/<name>.json` is produced off-client by `produce.py` from the pinned Python `linkml` 1.11.1 (`SchemaView`), invoked by the Vite plugin in `vite.config.ts` on dev-server start and on build. The viewer fetches it and `projectReconciledArtifact()` maps its class / effective-slot / relationship facts into `NormalizedSchema`. Every field is consumed directly; the only viewer-owned value is `is_fk`, read as membership in the artefact's authoritative FK relationship set (not recomputed from `range_kind`/`identifier`). Self-referential FK relationships remain authoritative facts but are not materialised as canvas self-loops (a presentation choice). Category-4 invented fields (`is_self_reference`, per-slot `etl_target_classes`) and all in-browser LinkML reasoning are deleted. `declared_by` / `inherited_from` / `from_schema` come from the artefact. `ErdClass.pk_slot` is the artefact's `pk_slot`.
+
+**Locked producer environment (R2.8.4).** The producer's execution environment is a committed uv project at the repo root: `pyproject.toml` (declares `linkml==1.11.1`), `uv.lock` (exact resolved dependency set) and `.python-version` (`3.12`). `deploy/producer-runner.mjs::uvProducerArgs()` emits `uv run --locked produce.py …`; `--locked` refuses a missing/stale lock, so no boundary (build, dev middleware, production origin, verifier) can silently re-resolve a different toolchain. The version pin has exactly one authority — the lock — not a second copy in JavaScript. Reproducibility contract: *identical repository source state + identical locked producer environment → identical reconciled content*. Each artefact records `reproducibility.content_digest` (content identity, toolchain-independent), `reproducibility.output_digest` (content + toolchain provenance), and `python_version` / `linkml_version` / `linkml_runtime_version` as provenance. `bun run test:repro` (`deploy/repro-check.mjs`) proves determinism by running the producer twice, each pass in its own freshly-synced environment from `uv.lock`, and requiring byte-identical output.
 
 **Uploads / hand-edited schemas (R1.8).** These have no artefact and POST to `/reconcile`, served by the Vite plugin's native dev-server middleware (`configureServer`), which executes the **same** `produce.py` and returns the **same** artefact shape. The client projects it identically via `projectReconciledArtifact()`. There is exactly one producer; the browser `linkml-runtime` residual is deleted.
 

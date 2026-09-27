@@ -52,31 +52,21 @@ export function resolveUv() {
 export const MAX_BODY_BYTES = 64 * 1024 * 1024;
 
 /**
- * The producer authority pin. Kept in one place so the build-time and
- * upload-time boundaries can never execute different LinkML versions.
- */
-export const LINKML_VERSION = '1.11.1';
-export const PYTHON_VERSION = '3.12';
-
-/**
- * Build the `uv run --with linkml==<pin> --python <pin> produce.py <args>`
- * argv. The call site supplies its own `produce.py` path so config bundling
- * cannot relocate the entry point.
+ * Build the `uv run --locked produce.py <args>` argv.
+ *
+ * The producer environment is the repository's locked uv project
+ * (`pyproject.toml` + `uv.lock` + `.python-version`). `--locked` refuses to run
+ * if the lockfile is missing or stale, so no boundary can silently re-resolve a
+ * different LinkML version: the pin has exactly one authority (the lock), not a
+ * second copy in this file. The call site supplies its own `produce.py` path so
+ * config bundling cannot relocate the entry point.
  *
  * @param {string} producerEntry absolute path to `produce.py`
  * @param {string[]} args producer CLI args
  * @returns {string[]}
  */
 export function uvProducerArgs(producerEntry, args) {
-	return [
-		'run',
-		'--with',
-		`linkml==${LINKML_VERSION}`,
-		'--python',
-		PYTHON_VERSION,
-		producerEntry,
-		...args
-	];
+	return ['run', '--locked', producerEntry, ...args];
 }
 
 // Every live producer child is tracked so it can be terminated as a process

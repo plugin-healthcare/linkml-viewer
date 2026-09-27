@@ -1,9 +1,7 @@
 // ---------------------------------------------------------------------------
-// LinkML schema types — matches the raw YAML structure for uploaded files
-// and the normalized internal representation consumed by the ERD layout.
+// Shared ERD viewer types and interaction/LOD constants.
+// Type-only: this module has no runtime imports.
 // ---------------------------------------------------------------------------
-
-import type { Position } from '@xyflow/svelte';
 
 /**
  * Canonical kind of a slot's resolved range, in metamodel terms.
@@ -212,20 +210,6 @@ export interface FileInfo {
 // or to the viewport. Viewport motion is reserved for explicit fit requests and
 // search navigation.
 
-/** Canonical names of the interaction concepts and their meaning. */
-export const INTERACTION_CONCEPTS = {
-  hover: 'transient pointer emphasis — CSS-owned, not app state',
-  focus: 'keyboard focus — DOM-owned, surfaced via :focus-visible',
-  selected: 'persistent node/edge selection — owned by Svelte Flow',
-  searchTarget: 'transient search emphasis (table id | null) — auto-clears',
-  collapsed: 'Set<string> of tables rendered without their column children',
-  locked: 'canvas interactivity lock — draggable/connectable/selectable',
-  activeFileId: 'workspace file currently rendered',
-  groupConfig: 'Map<string, GroupInfo> colour/label configuration',
-} as const;
-
-export type InteractionConcept = keyof typeof INTERACTION_CONCEPTS;
-
 // ---------------------------------------------------------------------------
 // Level of detail
 // ---------------------------------------------------------------------------
@@ -245,6 +229,19 @@ export const LOD = {
 } as const;
 
 export type LodLevel = (typeof LOD)[keyof typeof LOD];
+
+/**
+ * The single executable authority for the zoom boundaries between LOD levels.
+ * `FlowController` derives the active level from the viewport zoom using these
+ * values, and the documentation above reads them from here, so the boundaries
+ * are declared exactly once.
+ */
+export const LOD_ZOOM = {
+  /** zoom >= this → STRUCTURAL (LOD 1) */
+  STRUCTURAL_MIN: 0.5,
+  /** zoom >= this → SEMANTIC (LOD 2) */
+  SEMANTIC_MIN: 0.85,
+} as const;
 
 /** Direction for spatial graph navigation (keyboard cursor movement). */
 export type NavDirection = 'left' | 'right' | 'up' | 'down';
@@ -286,22 +283,6 @@ export interface RelationshipFocus {
   strongEdgeIds: Set<string>;
 }
 
-/**
- * Shape of the interaction state owned by +page.svelte.
- *
- * `selected` and `locked` are deliberately absent: `selected` is owned by
- * Svelte Flow's store, and `locked` is a projection of the flow store's
- * `nodesDraggable`/`elementsSelectable` toggled from CustomControls. Neither
- * lives in +page.svelte state, so neither belongs in this contract.
- */
-export interface InteractionState {
-  cursor: string | null;
-  searchTarget: string | null;
-  collapsed: Set<string>;
-  activeFileId: string | null;
-  groupConfig: Map<string, GroupInfo>;
-}
-
 // ---------------------------------------------------------------------------
 // ERD graph model — projected from the reconciled artefact, input to Svelte Flow
 // ---------------------------------------------------------------------------
@@ -333,13 +314,6 @@ export interface ErdColumnNodeData {
   description: string;
   exact_mappings: string[]; // ETL mapping CURIEs
   tableId: string;        // parent className — used for edge IDs
-  /**
-   * Resolved handle sides for the active layout direction (viewer/layout
-   * presentation, not semantics). `LR`/`RIGHT` → source right, target left;
-   * `TB`/`DOWN` → source bottom, target top. Resolved once in `layout.ts`.
-   */
-  sourcePosition: Position;
-  targetPosition: Position;
 }
 
 export interface ErdEdgeData {

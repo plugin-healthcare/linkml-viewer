@@ -857,6 +857,24 @@ def _canonical(obj) -> str:
     return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
+# Environment-dependent provenance. These keys identify WHICH locked toolchain
+# produced an artefact. They are recorded (so the digest stays auditable) but are
+# deliberately excluded from ``content_digest``: the reproducibility claim is
+# "identical repository source state + identical locked environment -> identical
+# content", and the toolchain metadata is provenance, not content identity.
+ENV_PROVENANCE_KEYS = ("python_version", "linkml_version", "linkml_runtime_version")
+
+
+def _content_digest(body: dict) -> str:
+    """Digest of the reconciled content, independent of the producer toolchain."""
+    reproducibility = {
+        k: v for k, v in body["reproducibility"].items() if k not in ENV_PROVENANCE_KEYS
+    }
+    return _sha256_bytes(
+        _canonical({**body, "reproducibility": reproducibility}).encode("utf-8")
+    )
+
+
 def build_artefact(schema_path: Path, schema_label: str | None = None) -> dict:
     """Build the reconciled artefact for one schema.
 
@@ -898,7 +916,13 @@ def build_artefact(schema_path: Path, schema_label: str | None = None) -> dict:
     digest = _sha256_bytes(_canonical(body).encode("utf-8"))
     return {
         **body,
-        "reproducibility": {**body["reproducibility"], "output_digest": digest},
+        "reproducibility": {
+            **body["reproducibility"],
+            # content identity (source + projection rules, toolchain-independent)
+            "content_digest": _content_digest(body),
+            # content identity + toolchain provenance (full environment identity)
+            "output_digest": digest,
+        },
     }
 
 
@@ -1038,7 +1062,8 @@ def main(argv: list[str]) -> int:
             f"(cross={counts['fk_slots_cross']} self={counts['fk_slots_self']}) "
             f"identifiers={counts['identifiers']} etl={counts['etl_relationships']} "
             f"reconciliation_gaps={len(gaps)} "
-            f"digest={artefact['reproducibility']['output_digest']}]"
+            f"content_digest={artefact['reproducibility']['content_digest']} "
+            f"output_digest={artefact['reproducibility']['output_digest']}]"
         )
     return 0
 

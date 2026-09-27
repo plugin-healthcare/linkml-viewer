@@ -4,6 +4,10 @@ node_modules
 __pycache__/
 *.pyc
 
+# Locked producer environment (uv). `pyproject.toml`, `uv.lock` and
+# `.python-version` ARE committed — only the materialised venv is ignored.
+/.venv/
+
 # Generated reconciled artefacts — pipeline output from produce.py via the Vite
 # plugin in vite.config.ts (dev-server start + build). Not hand-committed.
 /static/reconciled/

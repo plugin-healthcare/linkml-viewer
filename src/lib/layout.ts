@@ -80,9 +80,16 @@ function colId(className: string, slotName: string): string {
  * uploads). The target anchor is the artefact's per-relationship `target_slot`,
  * not a viewer re-selection.
  *
- * The only residual presentation fallback: a collapsed table has no column node
- * (target the table header), or a table whose target anchor names no rendered
- * column (target its first column) — both purely geometric.
+ * The residual geometric fallbacks: a table whose target anchor names no
+ * rendered column falls back to its first column; a collapsed table resolves to
+ * the bare table id (the collapsed relationship's endpoint is the table, not a
+ * column).
+ *
+ * R2.8.3: to keep such edges renderable, `TableParentNode` exposes its own
+ * source/target `<Handle>` when collapsed (the column children own the handles
+ * when expanded). Svelte Flow's `getEdgePosition` therefore resolves the bare
+ * table id, so a collapsed table keeps every incident edge — anchored to its
+ * header — rather than dropping it. Pinned by `e2e/collapsed-edges.spec.ts`.
  */
 function targetNodeId(
   rel: ReconciledRelationship,
@@ -208,6 +215,11 @@ function buildTableParentNode(
       fileId: cls.fileId,
       slotCount: cls.slots.length,
     } as unknown as Record<string, unknown>,
+    // Handle sides are declared on the node itself (Svelte Flow's native
+    // `sourcePosition`/`targetPosition`), not duplicated in `data`. The parent
+    // renders no Handle (columns own them), but the direction is still the
+    // layout's single declaration of the active rank direction and is asserted
+    // by bench-layout.ts.
     sourcePosition: isLR ? Position.Right : Position.Bottom,
     targetPosition: isLR ? Position.Left : Position.Top,
   };
@@ -254,12 +266,11 @@ function buildColumnNodes(
       description: slot.description,
       exact_mappings: slot.exact_mappings,
       tableId: className,
-      // Handle sides for the active direction (LR/RIGHT → horizontal,
-      // TB/DOWN → vertical). ColumnNode reads these from data so the visual
-      // handles stay coherent with the engine's rank direction.
-      sourcePosition: isLR ? Position.Right : Position.Bottom,
-      targetPosition: isLR ? Position.Left : Position.Top,
     } as unknown as Record<string, unknown>,
+    // Svelte Flow's native handle orientation: ColumnNode reads these node-level
+    // props (not a `data` copy) for its `<Handle position>`. LR/RIGHT →
+    // source right, target left; TB/DOWN → source bottom, target top, so the
+    // handles stay coherent with the engine's rank direction.
     sourcePosition: isLR ? Position.Right : Position.Bottom,
     targetPosition: isLR ? Position.Left : Position.Top,
   }));

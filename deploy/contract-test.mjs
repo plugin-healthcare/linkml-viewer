@@ -155,11 +155,13 @@ function sha256(text) {
  * Canonical artefact identity: everything the producer emits except the
  * location-dependent `reproducibility.schema_path` label (bundled path is
  * repo-relative; the reconcile boundary labels with the uploaded root name) and
- * the derived `output_digest` field itself.
+ * the derived digest outputs (`output_digest`, `content_digest`) — those are
+ * functions of the content, not identity inputs.
  */
 function canonicalIdentityDigest(artifact) {
 	const clone = JSON.parse(JSON.stringify(artifact));
 	delete clone.reproducibility.output_digest;
+	delete clone.reproducibility.content_digest;
 	clone.reproducibility.schema_path = '<schema>';
 	return sha256(canonical(clone));
 }
