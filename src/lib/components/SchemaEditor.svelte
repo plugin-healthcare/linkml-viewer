@@ -5,11 +5,13 @@
   import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
   import { yaml } from '@codemirror/lang-yaml';
   import { oneDark } from '@codemirror/theme-one-dark';
-  import { parseLinkMLSchema } from '$lib/linkml';
+  import { load as yamlLoad } from 'js-yaml';
 
   interface Props {
     yamlText: string;
-    onchange: (text: string, schema: ReturnType<typeof parseLinkMLSchema>) => void;
+    // The editor validates YAML syntax (js-yaml) only; LinkML semantics are
+    // resolved downstream by the Vite /reconcile producer when the text lands.
+    onchange: (text: string) => void;
     onclose: () => void;
   }
 
@@ -24,9 +26,9 @@
     if (debounceTimer !== undefined) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       try {
-        const schema = parseLinkMLSchema(text);
+        yamlLoad(text);
         parseError = '';
-        onchange(text, schema);
+        onchange(text);
       } catch (e) {
         parseError = (e as Error).message;
       }
@@ -93,7 +95,10 @@
 
 <style>
   .schema-editor-panel {
-    width: 420px;
+    /* Viewport-aware width (R2.7.2): pixel-identical to 420px at >=1106px
+       (38vw >= 420) but shrinks below so the panel never drives the canvas to
+       0. At 1280/1600 this resolves to exactly 420px — unchanged. */
+    width: min(420px, 38vw);
     flex-shrink: 0;
     display: flex;
     flex-direction: column;

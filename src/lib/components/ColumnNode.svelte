@@ -1,59 +1,84 @@
 <script lang="ts">
-  import { Handle, Position, type NodeProps, type Node } from '@xyflow/svelte';
-  import type { ErdColumnNodeData } from '$lib/types';
+  import { getContext } from 'svelte';
+  import { Handle, type NodeProps, type Node } from '@xyflow/svelte';
+  import type { ErdColumnNodeData, RelationshipFocus } from '$lib/types';
 
   // Accept the base unparameterised NodeProps — re-derive our data shape below.
   let { data }: NodeProps<Node<Record<string, unknown>>> = $props();
 
   const rawData = $derived(data as unknown as ErdColumnNodeData);
 
-  // ---------------------------------------------------------------------------
-  // Display helpers
-  // ---------------------------------------------------------------------------
+  // Level of detail, derived from zoom by FlowController. Presentation only —
+  // it never changes node geometry.
+  const lodCtx = getContext<{ level: number } | null>('lodLevel');
+  const lod = $derived(lodCtx?.level ?? 2);
 
-  function slotIcon(): string {
+  // Relationship focus — derived from native selection in +page.svelte. A row is
+  // highlighted with its table and dimmed (never hidden) when its table is
+  // outside the focused neighbourhood.
+  const focusCtx = getContext<RelationshipFocus | null>('relationshipFocus');
+  const isRelated = $derived(
+    focusCtx?.active === true && focusCtx.tableIds.has(rawData.tableId)
+  );
+  const isDimmed = $derived(focusCtx?.active === true && !isRelated);
+
+  const showBadge = $derived(lod >= 1);   // PK/FK marker
+  const showType = $derived(lod >= 2);    // range ("integer", "Concept", …)
+  const showMapping = $derived(lod >= 2); // ETL mapping badge
+
+  const slotIcon = $derived.by(() => {
     if (rawData.identifier) return 'PK';
     if (rawData.is_fk) return 'FK';
     return '';
-  }
+  });
 
   /** Return the first exact_mapping value, shortened for display.
    *  e.g. "omop_cdm54:Person.person_source_value" → "Person.person_source_value"
    */
-  function primaryMapping(): string {
+  const primaryMapping = $derived.by(() => {
     const m = rawData.exact_mappings?.[0];
     if (!m) return '';
     const colon = m.lastIndexOf(':');
     return colon >= 0 ? m.slice(colon + 1) : m;
-  }
+  });
 </script>
 
-<!-- Source handle on the right — FK/ETL edges originate from this column -->
-<Handle type="source" position={Position.Right} />
-<!-- Target handle on the left — FK/ETL edges terminate at this column (typically PK) -->
-<Handle type="target" position={Position.Left} />
+<!-- Handle sides follow the active layout direction: LR/RIGHT → source right,
+     target left; TB/DOWN → source bottom, target top. Resolved in layout.ts and
+     carried on the column node data so the handles stay coherent with the
+     engine's rank direction. Types are fixed (source/target); only the side
+     varies. -->
+<Handle type="source" position={rawData.sourcePosition} />
+<Handle type="target" position={rawData.targetPosition} />
 
 <div
   class="col-row"
   class:required={rawData.required}
   class:pk={rawData.identifier}
   class:fk={rawData.is_fk && !rawData.identifier}
+  class:lod0={lod < 1}
+  class:related={isRelated}
+  class:dimmed={isDimmed}
   title={rawData.description || rawData.slotName}
 >
-  <span
-    class="slot-badge"
-    class:badge-pk={rawData.identifier}
-    class:badge-fk={rawData.is_fk && !rawData.identifier}
-  >
-    {slotIcon()}
-  </span>
+  {#if showBadge}
+    <span
+      class="slot-badge"
+      class:badge-pk={rawData.identifier}
+      class:badge-fk={rawData.is_fk && !rawData.identifier}
+    >
+      {slotIcon}
+    </span>
+  {/if}
   <span class="slot-name">{rawData.slotName}</span>
-  <span class="slot-type">{rawData.range}</span>
-  {#if primaryMapping()}
+  {#if showType}
+    <span class="slot-type">{rawData.range}</span>
+  {/if}
+  {#if showMapping && primaryMapping}
     <span
       class="slot-mapping"
       title={rawData.exact_mappings?.join('\n')}
-    >{primaryMapping()}</span>
+    >{primaryMapping}</span>
   {/if}
 </div>
 
@@ -74,10 +99,23 @@
     pointer-events: all;
   }
 
-  /* Subtle alternating background is handled by even/odd child via border-bottom */
-
   .col-row.required .slot-name {
     font-weight: 600;
+  }
+
+  /* Overview level: names only, no badge/type/mapping. */
+  .col-row.lod0 .slot-name {
+    color: #334155;
+  }
+
+  /* Relationship focus (R2.4.1): rows of the focused table stay at full
+     prominence; unrelated rows are reduced (not hidden). Presentation only. */
+  .col-row.related .slot-name {
+    color: #0f172a;
+  }
+
+  .col-row.dimmed {
+    opacity: 0.4;
   }
 
   .slot-badge {
@@ -108,7 +146,7 @@
 
   .slot-type {
     font-size: 10px;
-    color: #94a3b8;
+    color: #64748b;
     white-space: nowrap;
     flex-shrink: 0;
     font-style: italic;
@@ -116,7 +154,7 @@
 
   .slot-mapping {
     font-size: 9px;
-    color: #6366f1; /* indigo-500 */
+    color: var(--erd-edge-label-etl);
     white-space: nowrap;
     flex-shrink: 0;
     font-style: italic;

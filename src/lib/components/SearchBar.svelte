@@ -1,12 +1,6 @@
 <script lang="ts">
   import type { NormalizedSchema } from '$lib/types';
-
-  /**
-   * Separator used between class name and slot name in column node IDs.
-   * Must stay in sync with COL_ID_SEP in src/lib/layout.ts.
-   * A null byte cannot appear in LinkML identifiers, so it is unambiguous.
-   */
-  const COL_ID_SEP = '\x00';
+  import { COL_ID_SEP } from '$lib/layout';
 
   interface SearchResult {
     /** The Svelte Flow node ID to pan to.
@@ -29,32 +23,45 @@
 
   let { schema, onselect }: Props = $props();
 
+  const LISTBOX_ID = 'search-listbox';
+  const optionId = (i: number) => `search-option-${i}`;
+
+  // Platform-aware shortcut hint; the global handler accepts meta or ctrl.
+  const shortcutHint =
+    typeof navigator !== 'undefined' &&
+    /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent)
+      ? '⌘K'
+      : 'Ctrl K';
+
   let query = $state('');
   let activeIndex = $state(-1);
+  // Explicit open state. The popup is only closed on selection or explicit
+  // dismiss — never by a blur timer racing a pointer click.
+  let open = $state(false);
   let inputEl: HTMLInputElement | undefined = $state();
-  let open = $derived(query.trim().length > 0);
+  let wrapperEl: HTMLDivElement | undefined = $state();
 
   const MAX_RESULTS = 12;
 
   const results = $derived.by<SearchResult[]>(() => {
     if (!schema || query.trim() === '') return [];
     const q = query.trim().toLowerCase();
-    const found: SearchResult[] = [];
+    const tables: SearchResult[] = [];
+    const columns: SearchResult[] = [];
 
     for (const [classId, cls] of Object.entries(schema.classes)) {
-      if (found.length >= MAX_RESULTS) break;
-
-      // Class name match (table) — highest priority
+      // Class name match (table) — highest priority. Ranked globally, not just
+      // within a class, so a class-name hit always precedes column hits (e.g.
+      // "person" returns the `person` table before any `person_id` column).
       if (cls.name.toLowerCase().includes(q)) {
-        found.push({ nodeId: classId, label: cls.name, kind: 'table' });
+        tables.push({ nodeId: classId, label: cls.name, kind: 'table' });
         continue;
       }
 
       // Column name matches — find all matching slots, up to 3 per table
       const matchingSlots = cls.slots.filter((s) => s.name.toLowerCase().includes(q));
       for (const slot of matchingSlots.slice(0, 3)) {
-        if (found.length >= MAX_RESULTS) break;
-        found.push({
+        columns.push({
           nodeId: `${classId}${COL_ID_SEP}${slot.name}`,
           label: cls.name,
           sublabel: slot.name,
@@ -63,80 +70,113 @@
       }
     }
 
-    return found;
+    return [...tables, ...columns].slice(0, MAX_RESULTS);
   });
 
+  const hasQuery = $derived(query.trim().length > 0);
+  const listboxVisible = $derived(open && hasQuery && results.length > 0);
+  const noResultsVisible = $derived(open && hasQuery && results.length === 0);
+
+  // Reset the active option whenever the query changes.
   $effect(() => {
-    // Reset active index when results change
+    void query;
     activeIndex = -1;
   });
 
   function select(nodeId: string) {
     onselect(nodeId);
     query = '';
+    activeIndex = -1;
+    open = false;
+    inputEl?.focus();
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (!open) return;
+    if (e.key === 'Escape') {
+      if (open) {
+        e.preventDefault();
+        open = false;
+        activeIndex = -1;
+      } else if (query) {
+        e.preventDefault();
+        query = '';
+      }
+      return;
+    }
+
+    if (!listboxVisible) return;
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      activeIndex = Math.min(activeIndex + 1, results.length - 1);
+      activeIndex = activeIndex + 1 >= results.length ? 0 : activeIndex + 1;
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      activeIndex = Math.max(activeIndex - 1, 0);
+      activeIndex = activeIndex - 1 < 0 ? results.length - 1 : activeIndex - 1;
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      if (activeIndex >= 0 && results[activeIndex]) {
-        select(results[activeIndex].nodeId);
-      } else if (results.length > 0) {
-        select(results[0].nodeId);
-      }
-    } else if (e.key === 'Escape') {
-      query = '';
-      inputEl?.blur();
+      const choice = results[activeIndex] ?? results[0];
+      if (choice) select(choice.nodeId);
+    } else if (e.key === 'Tab') {
+      open = false;
+      activeIndex = -1;
     }
   }
 
-  function onBlur() {
-    // Delay so click on result fires before dropdown closes
-    setTimeout(() => { query = ''; }, 150);
+  function onFocusOut(e: FocusEvent) {
+    const next = e.relatedTarget as Node | null;
+    if (next && wrapperEl?.contains(next)) return;
+    open = false;
+    activeIndex = -1;
   }
 
   // Exposed so the parent can focus the input (e.g. via Cmd-K shortcut)
   export function focus() {
+    open = true;
     inputEl?.focus();
     inputEl?.select();
   }
 </script>
 
-<div class="search-wrap">
+<div class="search-wrap" bind:this={wrapperEl} onfocusout={onFocusOut}>
   <div class="search-input-row">
     <span class="search-icon">⌕</span>
     <input
       bind:this={inputEl}
       bind:value={query}
       onkeydown={onKeydown}
-      onblur={onBlur}
+      onfocus={() => { open = true; }}
+      oninput={() => { open = true; }}
       type="search"
       placeholder="Search tables or columns…"
       autocomplete="off"
       spellcheck="false"
       disabled={!schema}
+      role="combobox"
       aria-label="Search tables and columns"
+      aria-expanded={listboxVisible}
+      aria-controls={listboxVisible ? LISTBOX_ID : undefined}
       aria-autocomplete="list"
+      aria-activedescendant={activeIndex >= 0 && listboxVisible ? optionId(activeIndex) : undefined}
     />
-    <kbd class="kbd-hint">⌘K</kbd>
+    <kbd class="kbd-hint">{shortcutHint}</kbd>
   </div>
 
-  {#if open && results.length > 0}
-    <ul class="results" role="listbox">
-      {#each results as result, i}
+  {#if listboxVisible}
+    <ul class="results" id={LISTBOX_ID} role="listbox" aria-label="Search results">
+      {#each results as result, i (result.nodeId)}
         <li
+          id={optionId(i)}
           role="option"
           aria-selected={i === activeIndex}
           class:active={i === activeIndex}
-          onmousedown={() => select(result.nodeId)}
+          onmousedown={(e) => e.preventDefault()}
+          onclick={() => select(result.nodeId)}
+          onkeydown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              select(result.nodeId);
+            }
+          }}
         >
           <span class="kind-badge" class:kind-column={result.kind === 'column'}>
             {result.kind === 'table' ? 'T' : 'C'}
@@ -148,7 +188,7 @@
         </li>
       {/each}
     </ul>
-  {:else if open && query.trim().length > 0}
+  {:else if noResultsVisible}
     <div class="no-results">No matches</div>
   {/if}
 </div>
@@ -198,8 +238,15 @@
     min-width: 0;
   }
 
+  /* Keyboard focus must stay visible (D6). */
+  input:focus-visible {
+    outline: 2px solid #475569;
+    outline-offset: 1px;
+    border-radius: 3px;
+  }
+
   input::placeholder {
-    color: #94a3b8;
+    color: #64748b;
   }
 
   input:disabled {
@@ -220,7 +267,7 @@
     border-radius: 4px;
     font-size: 11px;
     font-family: ui-monospace, monospace;
-    color: #94a3b8;
+    color: #475569;
     background: #f1f5f9;
     white-space: nowrap;
     flex-shrink: 0;
@@ -259,6 +306,11 @@
   .results li:hover,
   .results li.active {
     background: #f1f5f9;
+  }
+
+  .results li.active {
+    outline: 2px solid #475569;
+    outline-offset: -2px;
   }
 
   /* T / C kind badge */

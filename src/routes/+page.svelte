@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, setContext } from 'svelte';
+  import { onMount, setContext, untrack } from 'svelte';
   import {
     SvelteFlow,
     Background,
@@ -15,19 +15,30 @@
   import FlowController from '$lib/components/FlowController.svelte';
   import GroupLegend from '$lib/components/GroupLegend.svelte';
   import CustomControls from '$lib/components/CustomControls.svelte';
+  import EdgeLabelOverlay from '$lib/components/EdgeLabelOverlay.svelte';
   import SchemaEditor from '$lib/components/SchemaEditor.svelte';
   import GroupEditor from '$lib/components/GroupEditor.svelte';
   import FileList from '$lib/components/FileList.svelte';
 
-  import { loadGroupConfig, parseWorkspaceFile, assignFileIds } from '$lib/linkml';
-  import { buildGraph } from '$lib/layout';
+  import {
+    assignFileIds,
+    assignWorkspaceFileIds,
+    reconcileWorkspace,
+    describeWorkspaceFile,
+    loadGroupConfig,
+    loadReconciledArtifact,
+  } from '$lib/linkml';
+  import { buildGraph, COL_ID_SEP } from '$lib/layout';
+  import { applyEdgeLod } from '$lib/edgeLod';
+  import { deriveRelationshipFocus, applyEdgeFocus, NO_FOCUS } from '$lib/edgeFocus';
   import type {
     NormalizedSchema,
     LayoutOptions,
     GroupInfo,
     WorkspaceFile,
-    ErdClass,
     FileInfo,
+    NavDirection,
+    RelationshipFocus,
   } from '$lib/types';
   import { base } from '$app/paths';
 
@@ -79,6 +90,60 @@
   setContext('collapseToggle', collapseCtx);
 
   // ---------------------------------------------------------------------------
+  // Search-target context — single authoritative state for the table currently
+  // emphasised by a search. This is transient navigation emphasis, distinct
+  // from selection, collapse, and hover (see InteractionState in types.ts).
+  // TableParentNode derives its `highlighted` class from this — the node array
+  // is never mutated to carry highlight state.
+  // ---------------------------------------------------------------------------
+  const searchCtx = $state<{ target: string | null }>({ target: null });
+  setContext('searchTarget', searchCtx);
+
+  // ---------------------------------------------------------------------------
+  // Graph cursor — the table currently under keyboard navigation. One new
+  // semantic state, distinct from searchTarget (transient navigation emphasis)
+  // and from Svelte Flow selection. Nodes derive their focus ring from this.
+  // ---------------------------------------------------------------------------
+  const cursorCtx = $state<{ id: string | null }>({ id: null });
+  setContext('cursor', cursorCtx);
+
+  // ---------------------------------------------------------------------------
+  // Level-of-detail context — the current information resolution (0 overview,
+  // 1 structural, 2 semantic). Derived from the flow viewport zoom by
+  // FlowController (the only component with access to the flow store) and read
+  // reactively by the node components. Presentation only: it never changes node
+  // geometry and never triggers a layout rebuild.
+  // ---------------------------------------------------------------------------
+  const lodCtx = $state<{ level: number }>({ level: 2 });
+  setContext('lodLevel', lodCtx);
+
+  // ---------------------------------------------------------------------------
+  // Native selection holder — the single place Svelte Flow's own selection is
+  // surfaced. FlowController calls useOnSelectionChange and writes the selected
+  // node/edge ids here. This is *not* a second selection model: it is a read
+  // projection of the library's `selectedNodes`/`selectedEdges`.
+  // ---------------------------------------------------------------------------
+  const selectionCtx = $state<{ nodeIds: string[]; edgeIds: string[] }>({
+    nodeIds: [],
+    edgeIds: [],
+  });
+  setContext('selection', selectionCtx);
+
+  // ---------------------------------------------------------------------------
+  // Relationship focus — a distinct transient state derived from native
+  // selection, separate from searchTarget (search emphasis) and cursor
+  // (keyboard navigation). Holds the focused table/edge ids; read reactively by
+  // TableParentNode/ColumnNode. Presentation only.
+  // ---------------------------------------------------------------------------
+  const focusCtx = $state<RelationshipFocus>({
+    active: NO_FOCUS.active,
+    tableIds: NO_FOCUS.tableIds,
+    edgeIds: NO_FOCUS.edgeIds,
+    strongEdgeIds: NO_FOCUS.strongEdgeIds,
+  });
+  setContext('relationshipFocus', focusCtx);
+
+  // ---------------------------------------------------------------------------
   // Node types registration
   // ---------------------------------------------------------------------------
   const nodeTypes = { tableParent: TableParentNode, column: ColumnNode };
@@ -90,72 +155,101 @@
   let activeFileId = $state<string | null>(null);
 
   // ---------------------------------------------------------------------------
-  // Import resolution
+  // Schema source — one producer, two input modes.
+  //
+  // Bundled schemas consume the authoritative reconciled artefact
+  // (static/reconciled/<name>.json), a pipeline output generated by the Vite
+  // plugin (vite.config.ts). Uploaded / hand-edited files POST to /reconcile,
+  // served by that same plugin, which runs the same produce.py. No in-browser
+  // LinkML reasoning remains.
   // ---------------------------------------------------------------------------
 
   /**
-   * Recursively resolve imports for a given file against the workspace.
-   * Returns the merged NormalizedSchema and a list of unresolvable import names.
+   * Bundled workspace-file stem → reconciled artefact name. Covers the bundled
+   * schemas that also ship a static viewer YAML (used for the workspace / YAML
+   * editor). The `synthetic_inheritance` artefact has no registered viewer YAML
+   * (its source is static/synthetic_inheritance.yaml); it is still loadable
+   * through the same `loadReconciledArtifact` entry point.
    */
-  function resolveImports(
-    file: WorkspaceFile,
-    allFiles: WorkspaceFile[],
-    visited = new Set<string>(),
-    depth = 0
-  ): { merged: NormalizedSchema; unresolved: string[] } {
-    const MAX_DEPTH = 6;
-    const stemMap = new Map(allFiles.map((f) => [f.stem.toLowerCase(), f]));
-    const mergedClasses: Record<string, ErdClass> = {};
-    const unresolved: string[] = [];
+  const BUNDLED_ARTIFACT_BY_STEM: Record<string, string> = {
+    omop_cdm: 'omop',
+    sein: 'sein',
+  };
 
-    // Process imports first (so the active file's classes can override)
-    if (depth < MAX_DEPTH) {
-      for (const imp of file.imports) {
-        const key = imp.toLowerCase();
-        if (visited.has(key)) continue;
-        visited.add(key);
+  /**
+   * The active file's artefact projection, when the active file is a bundled
+   * schema. `fileId` ties it to the workspace file so a switch to an upload
+   * falls through to the /reconcile reconciliation below.
+   */
+  let bundledSchema = $state.raw<{ fileId: string; schema: NormalizedSchema } | null>(null);
 
-        const imported = stemMap.get(key);
-        if (!imported) {
-          unresolved.push(imp);
-          continue;
-        }
-        const sub = resolveImports(imported, allFiles, visited, depth + 1);
-        // Stamp each imported class with the source file's id before merging
-        const stamped = assignFileIds(sub.merged, imported.id);
-        Object.assign(mergedClasses, stamped.classes);
-        unresolved.push(...sub.unresolved);
-      }
+  /**
+   * Workspace reconciliation — uploads / edited files only. The Vite
+   * /reconcile producer supplies the artefact; keyed by workspace identity +
+   * active file so a stale reply cannot win.
+   */
+  let reconciled = $state.raw<{
+    files: WorkspaceFile[];
+    activeId: string;
+    merged: NormalizedSchema;
+    unresolved: string[];
+  } | null>(null);
+
+  const schema = $derived(
+    bundledSchema && bundledSchema.fileId === activeFileId
+      ? bundledSchema.schema
+      : reconciled && reconciled.files === workspaceFiles && reconciled.activeId === activeFileId
+        ? reconciled.merged
+        : null
+  );
+  const unresolvedImports = $derived(
+    bundledSchema && bundledSchema.fileId === activeFileId
+      ? []
+      : reconciled && reconciled.files === workspaceFiles && reconciled.activeId === activeFileId
+        ? reconciled.unresolved
+        : []
+  );
+
+  // Reconcile the workspace through the Vite /reconcile endpoint whenever the
+  // active file is not served by an artefact. Async with a cancellation guard so
+  // a stale reply cannot win; no in-browser fallback exists.
+  $effect(() => {
+    const files = workspaceFiles;
+    const activeId = activeFileId;
+    if (!activeId || files.length === 0) {
+      reconciled = null;
+      return;
     }
+    if (bundledSchema && bundledSchema.fileId === activeId) {
+      reconciled = null;
+      return;
+    }
+    // Read the previous result without subscribing to it, so a failed request
+    // (which writes null) cannot re-trigger this effect into a retry loop.
+    const existing = untrack(() => reconciled);
+    if (existing && existing.files === files && existing.activeId === activeId) return;
 
-    // Active file's own classes override imports — stamp with active file id
-    const ownStamped = assignFileIds(
-      { name: file.schema.name, description: file.schema.description, id: file.schema.id, classes: file.schema.classes },
-      file.id
-    );
-    Object.assign(mergedClasses, ownStamped.classes);
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await reconcileWorkspace(files, activeId);
+        if (cancelled) return;
+        const merged = assignWorkspaceFileIds(result.merged, files, activeId);
+        reconciled = { files, activeId, merged, unresolved: result.unresolved };
+      } catch (e) {
+        if (cancelled) return;
+        loadError = `Schema reconciliation failed: ${(e as Error).message}`;
+        reconciled = null;
+      }
+    })();
 
-    return {
-      merged: {
-        name: file.schema.name,
-        description: file.schema.description,
-        id: file.schema.id,
-        classes: mergedClasses,
-      },
-      unresolved: [...new Set(unresolved)],
+    return () => {
+      cancelled = true;
     };
-  }
+  });
 
-  // Derived: the schema rendered on the canvas (active file + resolved imports)
-  const resolvedResult = $derived((() => {
-    if (!activeFileId || workspaceFiles.length === 0) return null;
-    const active = workspaceFiles.find((f) => f.id === activeFileId);
-    if (!active) return null;
-    return resolveImports(active, workspaceFiles);
-  })());
-
-  const schema = $derived(resolvedResult?.merged ?? null);
-  const unresolvedImports = $derived(resolvedResult?.unresolved ?? []);
+  // All class ids in the active schema — the target set for Collapse All.
+  const allClassIds = $derived(schema ? Object.keys(schema.classes) : []);
 
   // ---------------------------------------------------------------------------
   // Other derived values
@@ -163,19 +257,55 @@
   let loadError = $state('');
   let collapsed = $state<Set<string>>(new Set());
 
+  // Phase B / B1: set by the "Fit collapsed" handler, consumed by the next
+  // layout rebuild. Plain (non-reactive) on purpose — see the layout effect.
+  let pendingFit = false;
+
   // Svelte Flow reactive nodes/edges ($state.raw for performance)
   let nodes = $state.raw<Node[]>([]);
   let edges = $state.raw<Edge[]>([]);
 
-  // Layout options
-  let layoutOptions = $state<LayoutOptions>({ engine: 'dagre', direction: 'LR' });
+  // Layout options.
+  // R2.3 product default: ELK / LR. Decided against the product objective
+  // (overview legibility + local relationship readability), not a numeric
+  // ranking. ELK-LR Pareto-improves the previous Dagre-LR default: it raises
+  // the OMOP fit zoom (0.124 -> 0.161) and lowers edge crossings on both
+  // fixtures (OMOP 53 -> 52; SEIN 477 -> 276) with orthogonal edge routing and
+  // clear group banding. The accepted trade-off is forgoing Dagre-TB's higher
+  // raw fit zoom (0.195 OMOP) to keep dense FK/ETL regions legible; Dagre-LR,
+  // Dagre-TB and ELK-TB remain selectable below and in bench-layout.ts.
+  let layoutOptions = $state<LayoutOptions>({ engine: 'elk', direction: 'LR' });
   let layoutLoading = $state(false);
 
-  // Incremented after layout completes to trigger fitView inside FlowController
-  let fitViewTrigger = $state(0);
+  // Explicit fit intents only — initial load (and, conceptually, the Fit button,
+  // which calls fitView directly). Layout/viewport are otherwise decoupled:
+  // collapse/expand/search/select/group-colour never increment this.
+  let fitRequest = $state(0);
 
-  // Pan target set by search, cleared by FlowController after use
+  // Search navigation: node to centre on, plus a nonce so repeat hits re-fire.
   let panTarget = $state<string | null>(null);
+  let panNonce = $state(0);
+
+  // Timer that clears the transient search highlight; reset on each new search.
+  let searchClearTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // Imperative viewport handle supplied by FlowController (inside <SvelteFlow>).
+  // $state.raw so bind:this is legal, but reads inside the layout effect are
+  // wrapped in untrack() so their timing never re-triggers a rebuild.
+  let flowController = $state.raw<{
+    captureViewport: () => void;
+    restoreViewport: () => void;
+    moveCursor: (ids: string[], fromId: string | null, dir: NavDirection) => string | null;
+    centerNode: (id: string) => void;
+  }>();
+
+  // Tracks schema identity so only genuine schema changes request a fit.
+  let lastBuiltSchema: NormalizedSchema | null = null;
+
+  // Tracks the active layout engine+direction. A topology change (engine or
+  // direction) moves virtually every node, so it is treated as a deliberate
+  // fit intent rather than being viewport-preserved.
+  let lastBuiltLayoutKey = '';
 
   // Editor panel visibility
   let schemaEditorOpen = $state(false);
@@ -206,6 +336,40 @@
     const c = collapsed;
     const opts = layoutOptions;
 
+    // Fit intents: a genuine schema change, or a topology change (layout engine
+    // or direction). Content mutations — collapse/expand — preserve the
+    // viewport (conditionally: the user's own motion during the async layout
+    // always wins). Group-colour edits never reach this effect.
+    const layoutKey = `${opts.engine}:${opts.direction}`;
+    const schemaChanged = s !== lastBuiltSchema;
+    const isFit = schemaChanged || layoutKey !== lastBuiltLayoutKey;
+    lastBuiltSchema = s;
+    lastBuiltLayoutKey = layoutKey;
+
+    // Native state preservation (R2.4.4). Svelte Flow derives `selectedNodes`
+    // from `node.selected` on the array it is handed, and `nodes` is bound, so
+    // node selection lives on these objects. A content rebuild (collapse/expand,
+    // layout/direction change) replaces them and would silently drop the native
+    // `selected` flag — the node analogue of the R2.4.2 edge-reset bug. Carry the
+    // flag across a same-schema rebuild; a schema/file switch is a new graph, so
+    // its selection clears. Read untracked: selection changes must never
+    // re-trigger this effect. (Edges are round-tripped by `applyEdgeFocus`.)
+    const selectedNodeIds = schemaChanged
+      ? new Set<string>()
+      : new Set(untrack(() => nodes).filter((n) => n.selected).map((n) => n.id));
+
+    // Phase B / B1: an explicit "Fit collapsed" action requests a fit for the
+    // *next* rebuild of the same schema/layout. It is a plain (non-reactive)
+    // flag set synchronously by the handler before `collapsed` changes, so the
+    // layout effect never depends on it.
+    const doFit = isFit || pendingFit;
+    pendingFit = false;
+
+    // Capture the viewport immediately before the rebuild; restore it once the
+    // new nodes are applied. Explicit fit requests skip capture/restore.
+    const controller = untrack(() => flowController);
+    if (!doFit) controller?.captureViewport();
+
     let cancelled = false;
 
     (async () => {
@@ -213,9 +377,15 @@
       try {
         const result = await buildGraph(s, c, opts);
         if (!cancelled) {
-          nodes = result.nodes;
+          // Re-assert the preserved selection only for nodes that still exist.
+          nodes = selectedNodeIds.size
+            ? result.nodes.map((n) =>
+                selectedNodeIds.has(n.id) ? { ...n, selected: true } : n
+              )
+            : result.nodes;
           edges = result.edges;
-          fitViewTrigger += 1;
+          if (doFit) fitRequest += 1;
+          else controller?.restoreViewport();
         }
       } catch (e) {
         if (!cancelled) {
@@ -233,17 +403,33 @@
   // Schema loading
   // ---------------------------------------------------------------------------
 
-  /** Replace workspace with a single default file (OMOP CDM). */
+  /**
+   * Load a bundled schema by its workspace-file stem: the raw YAML (for the
+   * workspace / editor) plus its authoritative reconciled artefact (for
+   * semantics). Every bundled schema (`omop_cdm`, `sein`,
+   * `synthetic_inheritance`) loads through this one path.
+   */
+  async function loadBundledSchema(stem: string) {
+    const artifactName = BUNDLED_ARTIFACT_BY_STEM[stem];
+    if (!artifactName) throw new Error(`No reconciled artefact registered for '${stem}'`);
+    const [text, artifactSchema] = await Promise.all([
+      fetch(`${base}/${stem}.yaml`).then((r) => r.text()),
+      loadReconciledArtifact(artifactName),
+    ]);
+    const wf = describeWorkspaceFile(`${stem}.yaml`, text);
+    bundledSchema = { fileId: wf.id, schema: assignFileIds(artifactSchema, wf.id) };
+    workspaceFiles = [wf];
+    activeFileId = wf.id;
+    collapsed = new Set();
+    // Assign first palette color to the default file
+    fileCtx.map = new Map([[wf.id, FILE_PALETTE[0]]]);
+  }
+
+  /** Replace workspace with the default bundled schema (OMOP CDM). */
   async function loadDefault() {
     loadError = '';
     try {
-      const text = await fetch(`${base}/omop_cdm.yaml`).then((r) => r.text());
-      const wf = parseWorkspaceFile('omop_cdm.yaml', text);
-      workspaceFiles = [wf];
-      activeFileId = wf.id;
-      collapsed = new Set();
-      // Assign first palette color to the default file
-      fileCtx.map = new Map([[wf.id, FILE_PALETTE[0]]]);
+      await loadBundledSchema('omop_cdm');
     } catch (e) {
       loadError = `Failed to load default schema: ${(e as Error).message}`;
     }
@@ -276,6 +462,10 @@
     workspaceFiles = Array.from(map.values());
     // Trigger reactivity on fileCtx.map
     fileCtx.map = new Map(fileCtx.map);
+    // A replaced/removed bundled file loses its artefact association.
+    if (bundledSchema && !workspaceFiles.some((f) => f.id === bundledSchema!.fileId)) {
+      bundledSchema = null;
+    }
     // Activate the first incoming file (or keep current if it's still present)
     const currentStillPresent = workspaceFiles.some((f) => f.id === activeFileId);
     if (!currentStillPresent || !activeFileId) {
@@ -293,6 +483,7 @@
 
   /** Remove a file from the workspace. */
   function handleFileRemove(id: string) {
+    if (bundledSchema && bundledSchema.fileId === id) bundledSchema = null;
     workspaceFiles = workspaceFiles.filter((f) => f.id !== id);
     fileCtx.map.delete(id);
     fileCtx.map = new Map(fileCtx.map);
@@ -303,12 +494,14 @@
   }
 
   // Called by SchemaEditor when the user edits the YAML and it parses cleanly.
-  // Updates the active WorkspaceFile in-place.
-  function handleSchemaEditorChange(text: string, parsed: NormalizedSchema) {
+  // Editing a bundled file detaches its authoritative artefact, so the edited
+  // text reconciles through the Vite /reconcile producer instead.
+  function handleSchemaEditorChange(text: string) {
     if (!activeFileId) return;
+    if (bundledSchema && bundledSchema.fileId === activeFileId) bundledSchema = null;
     workspaceFiles = workspaceFiles.map((f) =>
       f.id === activeFileId
-        ? { ...f, text, schema: parsed }
+        ? { ...describeWorkspaceFile(f.name, text), id: f.id }
         : f
     );
     collapsed = new Set();
@@ -330,7 +523,26 @@
   // Search: set pan target — FlowController handles the pan
   // ---------------------------------------------------------------------------
   function handleSearchSelect(nodeId: string) {
+    // A column hit highlights its parent table; a table hit highlights itself.
+    const sep = nodeId.indexOf(COL_ID_SEP);
+    const tableId = sep >= 0 ? nodeId.slice(0, sep) : nodeId;
+    searchCtx.target = tableId;
+
+    // Search moves the keyboard cursor to its result (navigate ≠ search
+    // emphasis, but they share the same target semantically).
+    cursorCtx.id = tableId;
+
+    // Recentre at the user's current zoom (FlowController reads getViewport()).
     panTarget = nodeId;
+    panNonce += 1;
+
+    // Single auto-clear timer, reset on each new search so the newest target
+    // is authoritative and no stale timer clears it.
+    if (searchClearTimer !== undefined) clearTimeout(searchClearTimer);
+    searchClearTimer = setTimeout(() => {
+      searchCtx.target = null;
+      searchClearTimer = undefined;
+    }, 1500);
   }
 
   // Reference to SearchBar component for programmatic focus
@@ -352,8 +564,112 @@
     layoutOptions = opts;
   }
 
+  // Phase B / B1 geometry-density controls.
+  // Collapse All / Expand All are content mutations: the viewport is preserved.
+  function collapseAll() {
+    collapsed = new Set(allClassIds);
+  }
+
+  function expandAll() {
+    collapsed = new Set();
+  }
+
+  // Fit Collapsed is the one explicit fit intent among the density controls:
+  // collapse everything, then request a fit for the resulting build.
+  function fitCollapsed() {
+    pendingFit = true;
+    collapsed = new Set(allClassIds);
+  }
+
   // ---------------------------------------------------------------------------
-  // Helpers
+  // Keyboard graph navigation. Spatial, not DOM-order: arrow keys move the
+  // cursor to the most aligned neighbour in that direction. Centring uses
+  // setCenter at the current zoom — navigation is neither search nor fit.
+  // ---------------------------------------------------------------------------
+  const tableParentIds = $derived(
+    nodes.filter((n) => n.type === 'tableParent').map((n) => n.id)
+  );
+
+  const ARROW_DIRECTIONS: Record<string, 'left' | 'right' | 'up' | 'down'> = {
+    ArrowLeft: 'left',
+    ArrowRight: 'right',
+    ArrowUp: 'up',
+    ArrowDown: 'down',
+  };
+
+  function handleCanvasKeydown(e: KeyboardEvent) {
+    // Single keyboard authority. The canvas container owns arrow/Enter/Escape
+    // spatial navigation only when it is itself the event target. If focus is
+    // on a descendant (e.g. a table header <button>), that control owns the
+    // keypress and behaves natively — the spatial handler must not also fire.
+    if (e.target !== e.currentTarget) return;
+
+    const dir = ARROW_DIRECTIONS[e.key];
+    if (dir) {
+      e.preventDefault();
+      e.stopPropagation();
+      const next = flowController?.moveCursor(tableParentIds, cursorCtx.id, dir);
+      if (next) {
+        cursorCtx.id = next;
+        flowController?.centerNode(next);
+      }
+      return;
+    }
+
+    if (e.key === 'Enter' || e.key === ' ') {
+      if (!cursorCtx.id) return;
+      e.preventDefault();
+      e.stopPropagation();
+      collapseCtx.toggle(cursorCtx.id);
+      return;
+    }
+
+    if (e.key === 'Escape') {
+      if (cursorCtx.id) {
+        e.preventDefault();
+        cursorCtx.id = null;
+      }
+      (e.currentTarget as HTMLElement | null)?.blur();
+    }
+  }
+
+// Dev-only seam so the browser suite can position the cursor deterministically.
+$effect(() => {
+  if (!import.meta.env.DEV) return;
+  (globalThis as Record<string, unknown>).__erdNav = {
+    getCursor: () => cursorCtx.id,
+    setCursor: (id: string | null) => { cursorCtx.id = id; },
+  };
+});
+
+// Dev-only seam for layout switching (viewport contract tests).
+// Must be in onMount so it runs on the client, not during SSR.
+onMount(() => {
+  if (!import.meta.env.DEV) return;
+  (globalThis as Record<string, unknown>).__erdLayout = {
+    getLayoutOptions: () => ({ engine: layoutOptions.engine, direction: layoutOptions.direction }),
+    setLayoutOptions: (opts: { engine: string; direction: string }) => {
+      layoutOptions = opts as LayoutOptions;
+    },
+  };
+  (globalThis as Record<string, unknown>).__erdFocus = {
+    get: () => ({
+      active: focusCtx.active,
+      tableIds: [...focusCtx.tableIds],
+      edgeIds: [...focusCtx.edgeIds],
+      strongEdgeIds: [...focusCtx.strongEdgeIds],
+    }),
+  };
+  // Dev-only seam to load a bundled schema by stem, so edge-focus tests can
+  // exercise an ETL-bearing graph (OMOP has zero ETL relationships) through the
+  // same bundled-artefact path the default uses. Never registered in production.
+  (globalThis as Record<string, unknown>).__erdSchema = {
+    loadBundled: (stem: string) => loadBundledSchema(stem),
+  };
+});
+
+// ---------------------------------------------------------------------------
+// Helpers
   // ---------------------------------------------------------------------------
   const schemaName = $derived(schema?.name ?? 'Loading…');
   const tableCount = $derived(nodes.filter((n) => n.type === 'tableParent').length);
@@ -387,9 +703,7 @@
         const wf = workspaceFiles.find((f) => f.id === id);
         if (!wf) return null;
         const color = fileCtx.map.get(id) ?? '#94a3b8';
-        const label = wf.schema.name && wf.schema.name !== 'Unknown schema'
-          ? wf.schema.name
-          : wf.stem;
+        const label = wf.displayName || wf.stem;
         return { id, label, color } satisfies FileInfo;
       })
       .filter((f): f is FileInfo => f !== null)
@@ -402,12 +716,46 @@
   const etlEdgeCount = $derived(
     edges.filter((e) => (e.data as unknown as { edgeKind?: string })?.edgeKind === 'etl').length
   );
+
+  // Number of collapsed tables — drives the Collapse All button's disabled state.
+  const collapseCount = $derived(collapsed.size);
+
+  // R2.4.1 / R2.4.2 relationship focus — derived *only* from native selection +
+  // the existing rendered `edges`. No new graph: focused edges are a filter over
+  // `edges`; endpoint tables are read back from those edges' source/target ids.
+  // Edge selection takes precedence over table selection (see edgeFocus.ts).
+  const relationshipFocus = $derived(
+    deriveRelationshipFocus(edges, selectionCtx.nodeIds, selectionCtx.edgeIds)
+  );
+
+  // Publish the derived focus to the context holder read by node components.
+  $effect(() => {
+    focusCtx.active = relationshipFocus.active;
+    focusCtx.tableIds = relationshipFocus.tableIds;
+    focusCtx.edgeIds = relationshipFocus.edgeIds;
+    focusCtx.strongEdgeIds = relationshipFocus.strongEdgeIds;
+  });
+
+  // Phase B / B2 + R2.4.1 + R2.6.4.2: LOD and relationship focus are
+  // presentation-only. `displayEdges` is what Svelte Flow renders; `edges`
+  // remains the layout source of truth and is never mutated. Edge
+  // geometry/routing is untouched by either transform. Below LOD2 a natively
+  // selected edge (`relationshipFocus.strongEdgeIds`) has its zoom-coupled
+  // label suppressed here; `EdgeLabelOverlay` renders that existing `edge.label`
+  // at a fixed screen size instead. Selection swaps the label *surface*, it
+  // does not reconstruct relationship semantics.
+  const displayEdges = $derived(
+    applyEdgeFocus(
+      applyEdgeLod(edges, lodCtx.level, relationshipFocus.strongEdgeIds),
+      relationshipFocus
+    )
+  );
 </script>
 
 <svelte:window onkeydown={handleGlobalKeydown} />
 
 <div class="app">
-  <!-- Left sidebar: file list + optional domain legend -->
+  <!-- Left sidebar: file list + optional group legend -->
   <div class="sidebar-col">
     {#if workspaceFiles.length > 0}
       <FileList
@@ -485,31 +833,72 @@
 
     <!-- Main content row: canvas + optional editor panels -->
     <div class="content-row">
-      <!-- Svelte Flow canvas -->
-      <div class="canvas-area">
+      <!-- Svelte Flow canvas.
+           This div is a keyboard-operable application region: it owns spatial
+           arrow-key navigation and activation, so a nonnegative tabindex and a
+           keydown listener are intentional. -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <div
+        class="canvas-area"
+        tabindex="0"
+        role="application"
+        aria-label="Graph navigation. Arrow keys move between tables, Enter collapses or expands, Escape leaves navigation."
+        data-testid="graph-canvas"
+        onkeydown={handleCanvasKeydown}
+      >
         {#if schema && nodes.length > 0}
+          <!-- Read-only graph. Svelte Flow's editing affordances have no LinkML
+               meaning here, so they are disabled rather than validated:
+               nodesConnectable={false} — no handle drag-to-connect.
+               deleteKey={null}         — deletion cannot originate from keyboard.
+               nodesFocusable/edgesFocusable={false} — Svelte Flow's per-node/edge
+                 tab stops and keyboard selection/move handlers would be a second
+                 keyboard system competing with the app's spatial navigation (the
+                 .canvas-area handler + cursor). Disabling only focus removes that
+                 conflict while keeping Svelte Flow's a11y descriptions and live
+                 region (disableKeyboardA11y is left at its false default).
+               Note: there is no `edgesReconnectable` prop in @xyflow/svelte 1.7.0;
+               edge reconnection is opt-in via an <EdgeReconnectAnchor> that this
+               app never renders, so it is already disabled.
+               elevateEdgesOnSelect — native z-layering for the selected edge so
+                 it reads above the dimmed rest; presentation only (default true,
+                 set explicitly to make the R2.4.2 edge-inspection contract clear). -->
           <SvelteFlow
             bind:nodes
-            bind:edges
+            edges={displayEdges}
             {nodeTypes}
-            fitView
-            fitViewOptions={{ padding: 0.15 }}
             minZoom={0.1}
             maxZoom={2}
+            nodesConnectable={false}
+            nodesFocusable={false}
+            edgesFocusable={false}
+            deleteKey={null}
+            elevateEdgesOnSelect={true}
             proOptions={{ hideAttribution: false }}
           >
             <FlowController
+              bind:this={flowController}
               {panTarget}
-              {nodes}
-              {fitViewTrigger}
+              {panNonce}
+              {fitRequest}
               onpanned={() => { panTarget = null; }}
-              onhighlight={(updated) => { nodes = updated; }}
             />
             <Background />
+            <EdgeLabelOverlay
+              {edges}
+              strongEdgeIds={focusCtx.strongEdgeIds}
+              level={lodCtx.level}
+            />
             <CustomControls
               {layoutOptions}
               {layoutLoading}
               onlayoutselect={selectLayout}
+              {collapseCount}
+              tableTotal={tableCount}
+              oncollapseall={collapseAll}
+              onexpandall={expandAll}
+              onfitcollapsed={fitCollapsed}
             />
             <MiniMap
               nodeColor={(n) => {
@@ -567,7 +956,7 @@
     background: #f3f4f6;
   }
 
-  /* Left sidebar column: stacks FileList above DomainLegend */
+  /* Left sidebar column: stacks FileList above GroupLegend */
   .sidebar-col {
     display: flex;
     flex-direction: column;
@@ -612,6 +1001,8 @@
     gap: 10px;
     min-width: 0;
     flex: 1;
+    /* R2.7.2: clip the title cluster so it can never paint over the search bar. */
+    overflow: hidden;
   }
 
   .topbar-center {
@@ -635,7 +1026,10 @@
     font-weight: 700;
     color: #111827;
     white-space: nowrap;
-    flex-shrink: 0;
+    /* R2.7.2: truncate with an ellipsis rather than overpainting the search bar. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
   }
 
   .schema-name {
@@ -711,6 +1105,16 @@
     flex-direction: column;
     overflow: hidden;
     min-width: 0;
+  }
+
+  /* Persistent, non-time-limited keyboard focus indicator (WCAG 2.4.7).
+     Distinct from the `.table-parent.cursor` ring: this outline means the
+     canvas region owns DOM keyboard focus (arrow keys navigate from here),
+     while the cursor ring marks *which* table is the spatial target. Same
+     colour, different meaning — one is input focus, the other is position. */
+  .canvas-area:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: -2px;
   }
 
   /* Canvas */

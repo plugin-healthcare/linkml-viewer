@@ -1,333 +1,450 @@
 /**
- * LinkML schema parser
+ * LinkML schema ingestion — transport/materialisation boundary only.
  *
- * Accepts two input formats:
- *  1. Raw LinkML YAML (the primary format) — supports both:
- *     a. slots: list + top-level slots: dict + slot_usage: overrides
- *     b. attributes: inline slot definitions on each class
- *  2. Pre-normalized JSON export (legacy, for compatibility with uploaded JSON files)
+ * ONE PRODUCER, TWO INPUT MODES:
  *
- * Outputs a NormalizedSchema that the ERD layout and Svelte Flow components consume.
+ *   bundled  static/reconciled/<name>.json  --fetch-->  projectReconciledArtifact
+ *   upload   POST /reconcile  -->  projectReconciledArtifact
+ *
+ * `static/reconciled/<name>.json` is a pipeline output: the Vite plugin in
+ * `vite.config.ts` runs the producer on dev-server start and on build. Uploads
+ * POST to `/reconcile`, served by that same plugin via Vite's native dev-server
+ * middleware — there is no separate service process.
+ *
+ * Both modes yield the *same* artefact shape produced by the *same*
+ * `produce.py` (pinned linkml 1.11.1 + SchemaView). This module never
+ * computes LinkML semantics: it maps already-established class / effective-slot
+ * / relationship facts into the viewer's `NormalizedSchema`. Python/SchemaView
+ * stays off the client bundle; the former in-browser JS SchemaView residual is
+ * deleted.
+ *
+ * `js-yaml` is used for PARSE-ONLY concerns: workspace display metadata, the
+ * group config asset, and `imports:` extraction. Parsing YAML is not LinkML
+ * semantics.
  */
 
-import yaml from 'js-yaml';
+import { load as yamlLoad } from 'js-yaml';
 import { base } from '$app/paths';
 import type {
   NormalizedSchema,
   ErdClass,
   ErdSlot,
-  RawLinkMLSchema,
-  RawLinkMLSlot,
+  ErdRangeKind,
   GroupConfig,
   GroupInfo,
   WorkspaceFile,
   FileInfo,
+  ReconciledRelationship,
 } from './types';
 
-// ---------------------------------------------------------------------------
-// Annotation helper — handles both compact (scalar) and expanded ({tag,value}) forms
-// ---------------------------------------------------------------------------
-
-/**
- * Read a LinkML annotation value in either form:
- *   compact:  group: clinical          → annotation is the string "clinical"
- *   expanded: group: {tag: group, value: clinical} → annotation.value is "clinical"
- */
-function readAnnotation(
-  annotation: { tag: string; value: unknown } | string | number | boolean | null | undefined
-): string | undefined {
-  if (annotation == null) return undefined;
-  if (typeof annotation === 'object') {
-    return annotation.value != null ? String(annotation.value) : undefined;
-  }
-  return String(annotation);
-}
+type AnyRec = Record<string, any>;
 
 // ---------------------------------------------------------------------------
-// Primitive type set (ranges that are NOT foreign keys)
+// Input coercion
 // ---------------------------------------------------------------------------
 
-const PRIMITIVE_RANGES = new Set([
-  'string',
-  'integer',
-  'float',
-  'double',
-  'decimal',
-  'boolean',
-  'date',
-  'datetime',
-  'time',
-  'date_or_datetime',
-  'uri',
-  'uriorcurie',
-  'curie',
-  'ncname',
-  'objectidentifier',
-  'nodeidentifier',
-  'jsonpointer',
-  'jsonpath',
-  'sparqlpath',
-]);
-
-// ---------------------------------------------------------------------------
-// Parser: normalized JSON (legacy — pre-generated export format)
-// ---------------------------------------------------------------------------
-
-/**
- * Check whether the input looks like our normalized JSON export.
- *
- * Raw LinkML YAML also has a top-level `classes` object, so we must be more
- * specific. We scan every class entry looking for a discriminating signal:
- *
- * - A class with `slot_usage` → definitely raw LinkML
- * - A class whose `slots` is a non-empty string array → definitely raw LinkML
- * - A class whose `slots` is a non-empty object array → definitely normalized JSON
- *
- * Classes with empty/absent slots carry no signal and are skipped. If every
- * class is slot-less (no signal found) we conservatively return false so the
- * raw parser handles it — this is safe because the raw parser tolerates
- * slot-less classes gracefully.
- */
-function isNormalizedJson(raw: unknown): raw is NormalizedSchema {
-  if (typeof raw !== 'object' || raw === null) return false;
-  const r = raw as Record<string, unknown>;
-  if (typeof r.classes !== 'object' || r.classes === null) return false;
-
-  const classes = r.classes as Record<string, unknown>;
-
-  for (const classEntry of Object.values(classes)) {
-    if (typeof classEntry !== 'object' || classEntry === null) continue;
-    const fc = classEntry as Record<string, unknown>;
-
-    // Definitive raw-LinkML signal: presence of slot_usage
-    if ('slot_usage' in fc) return false;
-
-    const slots = fc.slots;
-    if (!Array.isArray(slots) || slots.length === 0) continue; // no signal, keep scanning
-
-    // Definitive raw-LinkML signal: slots is a string array
-    if (typeof slots[0] === 'string') return false;
-
-    // Definitive normalized signal: slots is an object array
-    if (typeof slots[0] === 'object') return true;
-  }
-
-  // No discriminating signal found (all classes are slot-less) — treat as raw
-  return false;
-}
-
-function parseNormalizedJson(raw: NormalizedSchema): NormalizedSchema {
-  return raw; // already in correct shape
-}
-
-// ---------------------------------------------------------------------------
-// Parser: raw LinkML YAML
-// ---------------------------------------------------------------------------
-
-function parseRawLinkML(raw: RawLinkMLSchema): NormalizedSchema {
-  const rawClasses = raw.classes ?? {};
-  const rawSlots = raw.slots ?? {};
-  const classNames = new Set(Object.keys(rawClasses));
-
-  const classes: Record<string, ErdClass> = {};
-
-  for (const [className, classDef] of Object.entries(rawClasses)) {
-    if (classDef.abstract) continue; // skip abstract classes
-
-    const slots: ErdSlot[] = [];
-
-    // -----------------------------------------------------------------------
-    // Path A: attributes: — inline slot definitions directly on the class
-    // -----------------------------------------------------------------------
-    if (classDef.attributes && Object.keys(classDef.attributes).length > 0) {
-      for (const [attrName, attrDef] of Object.entries(classDef.attributes)) {
-        const range = String(attrDef.range ?? 'string');
-        const isIdentifier = Boolean(attrDef.identifier);
-        const isFk = classNames.has(range) && !isIdentifier && !PRIMITIVE_RANGES.has(range);
-        const displayName = String(attrDef.alias ?? attrDef.name ?? attrName);
-
-        slots.push({
-          name: displayName,
-          slot_name: attrName,
-          range,
-          required: Boolean(attrDef.required),
-          identifier: isIdentifier,
-          multivalued: Boolean(attrDef.multivalued),
-          is_fk: isFk,
-          description: String(attrDef.description ?? ''),
-          exact_mappings: Array.isArray(attrDef.exact_mappings) ? attrDef.exact_mappings.map(String) : [],
-        });
-      }
-    }
-
-    // -----------------------------------------------------------------------
-    // Path B: slots: list + top-level slots: dict + slot_usage: overrides
-    // -----------------------------------------------------------------------
-    if (classDef.slots && classDef.slots.length > 0) {
-      const slotUsage = classDef.slot_usage ?? {};
-
-      for (const slotRefName of classDef.slots) {
-        const topSlot: RawLinkMLSlot = rawSlots[slotRefName] ?? {};
-        const usageSlot: Partial<RawLinkMLSlot> = slotUsage[slotRefName] ?? {};
-
-        // Merge: slot_usage overrides top-level
-        const merged: RawLinkMLSlot = { ...topSlot, ...usageSlot };
-
-        // Display name: prefer alias, then strip class prefix from slot name
-        const displayName =
-          merged.alias ??
-          (slotRefName.startsWith(className + '_')
-            ? slotRefName.slice(className.length + 1)
-            : slotRefName);
-
-        const range = String(merged.range ?? 'string');
-        const isIdentifier = Boolean(merged.identifier);
-        const isFk = classNames.has(range) && !isIdentifier && !PRIMITIVE_RANGES.has(range);
-
-        slots.push({
-          name: displayName,
-          slot_name: slotRefName,
-          range,
-          required: Boolean(merged.required),
-          identifier: isIdentifier,
-          multivalued: Boolean(merged.multivalued),
-          is_fk: isFk,
-          description: String(merged.description ?? ''),
-          exact_mappings: Array.isArray(merged.exact_mappings) ? merged.exact_mappings.map(String) : [],
-        });
-      }
-    }
-
-    classes[className] = {
-      name: className,
-      description: String(classDef.description ?? ''),
-      slots,
-      group: readAnnotation(classDef.annotations?.group),
-    };
-  }
-
-  return {
-    name: String(raw.name ?? 'Unknown schema'),
-    description: String(raw.description ?? ''),
-    id: String(raw.id ?? ''),
-    classes,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-/**
- * Parse a LinkML schema from either:
- *  - A raw YAML/JSON string
- *  - A pre-parsed object (normalized JSON export or raw YAML parsed by js-yaml)
- */
-export function parseLinkMLSchema(input: unknown): NormalizedSchema {
-  let raw: unknown = input;
-
-  // If given a string, parse it first
+function toRaw(input: unknown): AnyRec {
   if (typeof input === 'string') {
     const trimmed = input.trimStart();
     if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-      raw = JSON.parse(input);
-    } else {
-      raw = yaml.load(input);
+      return (JSON.parse(input) ?? {}) as AnyRec;
     }
+    return (yamlLoad(input) ?? {}) as AnyRec;
   }
-
-  if (isNormalizedJson(raw)) {
-    return parseNormalizedJson(raw);
-  }
-
-  // Treat as raw LinkML YAML
-  return parseRawLinkML(raw as RawLinkMLSchema);
+  return (input ?? {}) as AnyRec;
 }
 
-/**
- * Load the default OMOP CDM schema from the static YAML asset.
- */
-export async function loadDefaultSchema(): Promise<NormalizedSchema> {
-  const res = await fetch(`${base}/omop_cdm.yaml`);
-  if (!res.ok) throw new Error(`Failed to load default schema: ${res.statusText}`);
-  const text = await res.text();
-  return parseLinkMLSchema(text);
-}
-
-/**
- * Load group color/label configuration from the static YAML asset.
- * Returns a Map keyed by group name for O(1) lookup in TableNode.
- */
-export async function loadGroupConfig(): Promise<Map<string, GroupInfo>> {
-  const res = await fetch(`${base}/group-config.yaml`);
-  if (!res.ok) throw new Error(`Failed to load group config: ${res.statusText}`);
-  const text = await res.text();
-  const raw = yaml.load(text) as GroupConfig;
-  const map = new Map<string, GroupInfo>();
-  for (const entry of raw.groups ?? []) {
-    map.set(entry.name, entry);
-  }
-  return map;
-}
-
-/**
- * Extract user-defined import names from a raw YAML string or object.
- * Strips built-in linkml:* entries (e.g. "linkml:types").
- * Returns e.g. ["hix", "sein-omop"] for `imports: [linkml:types, hix, sein-omop]`.
- */
+/** User-defined import names from a raw YAML `imports:` list (linkml:* stripped). */
 export function extractImports(input: unknown): string[] {
-  let raw: unknown = input;
-  if (typeof input === 'string') {
-    const trimmed = input.trimStart();
-    try {
-      raw = trimmed.startsWith('{') || trimmed.startsWith('[')
-        ? JSON.parse(input)
-        : yaml.load(input);
-    } catch {
-      return [];
-    }
-  }
-  if (typeof raw !== 'object' || raw === null) return [];
-  const imports = (raw as Record<string, unknown>).imports;
+  const raw = toRaw(input);
+  const imports = raw.imports;
   if (!Array.isArray(imports)) return [];
   return imports
     .map((v) => String(v).trim())
     .filter((v) => v.length > 0 && !v.startsWith('linkml:'));
 }
 
+// ---------------------------------------------------------------------------
+// AUTHORITATIVE: reconciled artefact loader
+//
+// The artefact already contains: classes with pk/key slots, effective
+// (induced) slots with range_kind/range_target/identifier/required/multivalued/
+// exact_mappings/declared_by/inherited_from/from_schema, and the full FK+ETL
+// relationship set. This loader maps those facts 1:1 into the viewer shape.
+// ---------------------------------------------------------------------------
+
+interface ReconciledArtifactSlot {
+  name: string;
+  slot_name: string;
+  range: string;
+  range_kind: ErdRangeKind;
+  range_target: string | null;
+  identifier: boolean;
+  key: boolean;
+  required: boolean;
+  multivalued: boolean;
+  description: string;
+  exact_mappings: string[];
+  declared_by: string | null;
+  inherited_from: string | null;
+  from_schema: string | null;
+}
+
+interface ReconciledArtifactClass {
+  name: string;
+  description: string;
+  abstract: boolean;
+  group: string | null;
+  from_schema: string | null;
+  pk_slot: string | null;
+  pk_slot_name: string | null;
+  key_slot: string | null;
+  key_slot_name: string | null;
+  slots: ReconciledArtifactSlot[];
+}
+
+interface ReconciledArtifactRelationship {
+  kind: 'fk' | 'etl';
+  source_class: string;
+  target_class: string;
+  slot: string;
+  slot_name: string;
+  /** Reconciled target anchor column: display name (FK identifier / ETL mapping slot). */
+  target_slot: string | null;
+  /** Canonical slot name of the target anchor column. */
+  target_slot_name: string | null;
+  required: boolean;
+  self_reference: boolean;
+  /** Present on `etl` relationships only. */
+  mapping?: string;
+}
+
+/** Shape of `static/reconciled/<name>.json` (and the `/reconcile` response). */
+export interface ReconciledArtifact {
+  artifact: { format: string; version: number };
+  reproducibility: Record<string, unknown>;
+  schema: { name: string; id: string; description: string; imports_closure?: string[] };
+  classes: ReconciledArtifactClass[];
+  relationships: ReconciledArtifactRelationship[];
+  counts: Record<string, number>;
+}
+
+const RECONCILED_ARTIFACT_FORMAT = 'linkml-viewer-reconciled';
+
+/** Key separator for the (source_class, slot_name) FK-membership lookup. */
+const SLOT_KEY_SEP = '\x00';
+
 /**
- * Parse a raw YAML/JSON text into a WorkspaceFile, extracting both the
- * NormalizedSchema and the list of user-defined imports.
- * Throws if the text cannot be parsed or contains no classes.
+ * Project an authoritative reconciled artefact into the viewer's
+ * `NormalizedSchema`.
+ *
+ * Every field is consumed directly from the artefact. The only viewer-owned
+ * value is `is_fk`, which is read as membership in the authoritative FK
+ * relationship set (it is NOT recomputed from `range_kind`/`identifier`).
+ * Self-referential FK relationships remain authoritative facts in the artefact
+ * but are not materialised as canvas self-loops (a presentation choice).
  */
+export function projectReconciledArtifact(artifact: ReconciledArtifact): NormalizedSchema {
+  const fkSlots = new Set<string>();
+  const relationships: ReconciledRelationship[] = [];
+
+  for (const rel of artifact.relationships ?? []) {
+    if (rel.kind === 'fk') {
+      fkSlots.add(`${rel.source_class}${SLOT_KEY_SEP}${rel.slot_name}`);
+      // No self-loop edges: a self-reference is a valid fact but not a canvas edge.
+      if (rel.self_reference) continue;
+    }
+    relationships.push({
+      kind: rel.kind,
+      source: rel.source_class,
+      target: rel.target_class,
+      slot: rel.slot,
+      slot_name: rel.slot_name,
+      target_slot: rel.target_slot ?? null,
+      target_slot_name: rel.target_slot_name ?? null,
+      required: rel.required,
+    });
+  }
+
+  const classes: Record<string, ErdClass> = {};
+  for (const cls of artifact.classes ?? []) {
+    if (cls.abstract) continue;
+    const slots: ErdSlot[] = (cls.slots ?? []).map((slot) => ({
+      name: slot.name,
+      slot_name: slot.slot_name,
+      range: slot.range,
+      required: slot.required,
+      identifier: slot.identifier,
+      multivalued: slot.multivalued,
+      is_fk: fkSlots.has(`${cls.name}${SLOT_KEY_SEP}${slot.slot_name}`),
+      description: slot.description,
+      exact_mappings: [...(slot.exact_mappings ?? [])],
+      range_kind: slot.range_kind,
+      range_target: slot.range_target ?? null,
+      declared_by: slot.declared_by ?? null,
+      inherited_from: slot.inherited_from ?? null,
+      from_schema: slot.from_schema ?? cls.from_schema ?? artifact.schema.id,
+    }));
+    classes[cls.name] = {
+      name: cls.name,
+      description: cls.description,
+      slots,
+      group: cls.group ?? undefined,
+      from_schema: cls.from_schema ?? undefined,
+      pk_slot: cls.pk_slot ?? null,
+    };
+  }
+
+  return {
+    name: artifact.schema?.name ?? 'Unknown schema',
+    description: artifact.schema?.description ?? '',
+    id: artifact.schema?.id ?? '',
+    classes,
+    relationships,
+    unresolved: [],
+  };
+}
+
+/**
+ * In dev the Vite plugin generates `static/reconciled/<name>.json` off the
+ * critical path (so the dev server is available before a cold `uv` toolchain
+ * provision finishes). The fetch therefore tolerates a not-yet-generated
+ * artefact by retrying briefly. Production static export has no generation
+ * step, so it fetches once and surfaces any error immediately.
+ */
+const ARTIFACT_LOAD_RETRIES = 60;
+const ARTIFACT_LOAD_RETRY_MS = 500;
+
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Load a bundled reconciled artefact and project it into a `NormalizedSchema`.
+ * This is the viewer's authoritative load path for the bundled schemas.
+ */
+export async function loadReconciledArtifact(name: string): Promise<NormalizedSchema> {
+  const maxRetries = import.meta.env.DEV ? ARTIFACT_LOAD_RETRIES : 0;
+  for (let attempt = 0; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(`${base}/reconciled/${name}.json`);
+    } catch (e) {
+      if (attempt >= maxRetries) throw e;
+      await delay(ARTIFACT_LOAD_RETRY_MS);
+      continue;
+    }
+    if (res.ok) {
+      const artifact = (await res.json()) as ReconciledArtifact;
+      if (artifact?.artifact?.format !== RECONCILED_ARTIFACT_FORMAT) {
+        throw new Error(`Unexpected reconciled artifact format for '${name}'`);
+      }
+      return projectReconciledArtifact(artifact);
+    }
+    // 404 = the artefact is not generated yet (dev); every other status is a
+    // real error and is surfaced without retrying.
+    if (res.status !== 404 || attempt >= maxRetries) {
+      throw new Error(`Failed to load reconciled artifact '${name}': ${res.statusText}`);
+    }
+    await delay(ARTIFACT_LOAD_RETRY_MS);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// UPLOAD BOUNDARY — the same producer, executed off-client.
+//
+// The client POSTs the uploaded workspace to `${RECONCILE_URL}/reconcile`. In
+// dev that is the Vite middleware in `vite.config.ts`; in production it is the
+// `deploy/serve.mjs` origin behind the Cloudflare tunnel. Both run the same
+// `produce.py` through the shared `deploy/producer-runner.mjs` and return the
+// same artefact shape. There is no in-browser LinkML path and no fallback: if
+// the endpoint is unreachable the caller surfaces an error. Set
+// VITE_RECONCILE_URL only for an off-origin boundary.
+// ---------------------------------------------------------------------------
+
+/**
+ * Base URL of the reconciliation endpoint. Override with VITE_RECONCILE_URL.
+ *
+ * Defaults to the app's own `base` so the same-origin boundary is correct under
+ * the production sub-path: the static SPA is served at `/linkml-viewer/` and the
+ * production origin (`deploy/serve.mjs`) exposes `POST /linkml-viewer/reconcile`
+ * there, which the Cloudflare tunnel already routes to that process. In dev
+ * `base` is empty, so this is `/reconcile` — the Vite dev middleware, unchanged.
+ */
+export const RECONCILE_URL: string =
+  (import.meta.env.VITE_RECONCILE_URL as string | undefined) ?? base;
+
+export interface WorkspaceReconciliation {
+  merged: NormalizedSchema;
+  unresolved: string[];
+}
+
+function emptySchema(): NormalizedSchema {
+  return { name: 'Unknown schema', description: '', id: '', classes: {}, relationships: [] };
+}
+
+/**
+ * Import names (parse-only) that no workspace file resolves. This is workspace
+ * metadata, not LinkML semantics; the producer performs the actual closure.
+ */
+function unresolvedImportNames(files: WorkspaceFile[], active: WorkspaceFile): string[] {
+  const byStem = new Map(files.map((f) => [f.stem.toLowerCase(), f] as const));
+  const rawByFileId = new Map<string, AnyRec>();
+  const rawOf = (f: WorkspaceFile): AnyRec => {
+    let raw = rawByFileId.get(f.id);
+    if (!raw) {
+      raw = toRaw(f.text);
+      rawByFileId.set(f.id, raw);
+    }
+    return raw;
+  };
+
+  const unresolved: string[] = [];
+  const visited = new Set<string>([active.stem.toLowerCase()]);
+  const walk = (file: WorkspaceFile) => {
+    for (const name of extractImports(rawOf(file))) {
+      const key = name.toLowerCase();
+      if (visited.has(key)) continue;
+      visited.add(key);
+      const dep = byStem.get(key);
+      if (!dep) {
+        unresolved.push(name);
+        continue;
+      }
+      walk(dep);
+    }
+  };
+  walk(active);
+  return unresolved;
+}
+
+/**
+ * Reconcile an uploaded / hand-edited workspace through the Vite plugin's
+ * `/reconcile` endpoint and project the returned artefact exactly like the bundled one.
+ */
+export async function reconcileWorkspace(
+  files: WorkspaceFile[],
+  activeFileId: string
+): Promise<WorkspaceReconciliation> {
+  const active = files.find((f) => f.id === activeFileId) ?? files[0];
+  if (!active) return { merged: emptySchema(), unresolved: [] };
+
+  const unresolved = unresolvedImportNames(files, active);
+  const res = await fetch(`${RECONCILE_URL}/reconcile`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: active.name,
+      files: Object.fromEntries(files.map((f) => [f.name, f.text])),
+    }),
+  });
+
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) detail = body.error;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(`reconcile endpoint ${res.status}: ${detail}`);
+  }
+
+  const artifact = (await res.json()) as ReconciledArtifact;
+  if (artifact?.artifact?.format !== RECONCILED_ARTIFACT_FORMAT) {
+    throw new Error('Unexpected artifact format from /reconcile');
+  }
+  return { merged: projectReconciledArtifact(artifact), unresolved };
+}
+
+// ---------------------------------------------------------------------------
+// Workspace metadata (js-yaml parse-only)
+// ---------------------------------------------------------------------------
+
+/** Describe an uploaded YAML file as workspace metadata (js-yaml only). */
 export function parseWorkspaceFile(name: string, text: string): WorkspaceFile {
-  const schema = parseLinkMLSchema(text);
-  const imports = extractImports(text);
-  // Derive stem: strip last extension, keep basename only
+  return describeWorkspaceFile(name, text);
+}
+
+/** Alias retained for the workspace ingestion call sites. */
+export function describeWorkspaceFile(name: string, text: string): WorkspaceFile {
   const basename = name.includes('/') ? name.slice(name.lastIndexOf('/') + 1) : name;
   const dotIdx = basename.lastIndexOf('.');
   const stem = dotIdx > 0 ? basename.slice(0, dotIdx) : basename;
+  let displayName = stem;
+  let schemaId: string | undefined;
+  try {
+    const raw = yamlLoad(text) as AnyRec | undefined;
+    if (raw && typeof raw === 'object') {
+      if (raw.name != null && String(raw.name) !== '') displayName = String(raw.name);
+      if (raw.id != null && String(raw.id) !== '') schemaId = String(raw.id);
+    }
+  } catch {
+    /* fall back to the stem */
+  }
   return {
     id: crypto.randomUUID(),
     name: basename,
     stem,
     text,
-    schema,
-    imports,
+    displayName,
+    schemaId,
+    imports: extractImports(text),
   };
 }
 
 /**
  * Stamp every class in a NormalizedSchema with the given fileId.
- * Returns a new schema object (does not mutate the input).
- * Called during import resolution so each merged class knows its source file.
  */
 export function assignFileIds(schema: NormalizedSchema, fileId: string): NormalizedSchema {
-  const classes: Record<string, import('./types').ErdClass> = {};
+  const classes: Record<string, ErdClass> = {};
   for (const [key, cls] of Object.entries(schema.classes)) {
     classes[key] = { ...cls, fileId };
   }
   return { ...schema, classes };
+}
+
+/**
+ * Stamp each class with the workspace file it came from, using the artefact's
+ * authoritative `from_schema` provenance. Falls back to the active file. This
+ * is a workspace-identity projection, not LinkML meaning.
+ */
+export function assignWorkspaceFileIds(
+  schema: NormalizedSchema,
+  files: WorkspaceFile[],
+  fallbackFileId: string
+): NormalizedSchema {
+  const byKey = new Map<string, string>();
+  for (const f of files) {
+    for (const key of [f.name, f.stem, f.displayName, f.schemaId]) {
+      if (key) byKey.set(key.toLowerCase(), f.id);
+    }
+  }
+  const classes: Record<string, ErdClass> = {};
+  for (const [key, cls] of Object.entries(schema.classes)) {
+    const from = cls.from_schema?.toLowerCase();
+    classes[key] = { ...cls, fileId: (from && byKey.get(from)) || fallbackFileId };
+  }
+  return { ...schema, classes };
+}
+
+/**
+ * Load the default OMOP CDM schema from its authoritative reconciled artefact.
+ */
+export async function loadDefaultSchema(): Promise<NormalizedSchema> {
+  return loadReconciledArtifact('omop');
+}
+
+/**
+ * Load group color/label configuration from the static YAML asset.
+ */
+export async function loadGroupConfig(): Promise<Map<string, GroupInfo>> {
+  const res = await fetch(`${base}/group-config.yaml`);
+  if (!res.ok) throw new Error(`Failed to load group config: ${res.statusText}`);
+  const raw = yamlLoad(await res.text()) as GroupConfig;
+  const map = new Map<string, GroupInfo>();
+  for (const entry of raw.groups ?? []) {
+    map.set(entry.name, entry);
+  }
+  return map;
 }
 
 // Re-export FileInfo so callers can import it from '$lib/linkml' if needed

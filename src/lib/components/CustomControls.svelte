@@ -7,15 +7,36 @@
     layoutOptions: LayoutOptions;
     layoutLoading: boolean;
     onlayoutselect: (opts: LayoutOptions) => void;
+    // Phase B / B1 geometry-density controls. Kept as plain callbacks so the
+    // viewport/layout ownership stays in +page.svelte (controls never fitView
+    // except through the explicit `onfitcollapsed` intent).
+    collapseCount: number;
+    tableTotal: number;
+    oncollapseall: () => void;
+    onexpandall: () => void;
+    onfitcollapsed: () => void;
   }
 
-  let { layoutOptions, layoutLoading, onlayoutselect }: Props = $props();
+  let {
+    layoutOptions,
+    layoutLoading,
+    onlayoutselect,
+    collapseCount,
+    tableTotal,
+    oncollapseall,
+    onexpandall,
+    onfitcollapsed,
+  }: Props = $props();
 
   const { zoomIn, zoomOut, fitView } = useSvelteFlow();
   const store = $derived(useStore());
 
+  // Connectability is permanently disabled at the <SvelteFlow> level (the graph
+  // is schema-derived, so handles must never be draggable). The lock therefore
+  // governs only the two remaining interactive affordances: node dragging and
+  // element selection. It must never re-enable connection creation.
   const isInteractive = $derived(
-    store.nodesDraggable || store.nodesConnectable || store.elementsSelectable
+    store.nodesDraggable || store.elementsSelectable
   );
   const minZoomReached = $derived(store.viewport.zoom <= store.minZoom);
   const maxZoomReached = $derived(store.viewport.zoom >= store.maxZoom);
@@ -23,8 +44,8 @@
   function toggleInteractivity() {
     const next = !isInteractive;
     store.nodesDraggable = next;
-    store.nodesConnectable = next;
     store.elementsSelectable = next;
+    // store.nodesConnectable stays false — never assigned here.
   }
 
   const LAYOUT_BUTTONS: Array<{
@@ -82,8 +103,9 @@
   </button>
   <button
     class="ctrl-btn"
-    title={isInteractive ? 'Lock interactions' : 'Unlock interactions'}
-    aria-label={isInteractive ? 'Lock interactions' : 'Unlock interactions'}
+    title={isInteractive ? 'Lock dragging and selection' : 'Unlock dragging and selection'}
+    aria-label={isInteractive ? 'Lock dragging and selection' : 'Unlock dragging and selection'}
+    aria-pressed={!isInteractive}
     onclick={toggleInteractivity}
   >
     {#if isInteractive}
@@ -99,8 +121,37 @@
     {/if}
   </button>
 
-  <!-- Rows 3–4: layout buttons -->
-  {#each LAYOUT_BUTTONS as btn}
+  <!-- Phase B / B1: geometry-density controls.
+       Collapse All / Expand All are content mutations (viewport-preserving);
+       Fit Collapsed is the one explicit fit among them. -->
+  <button
+    class="ctrl-btn ctrl-btn-glyph"
+    title="Collapse all tables"
+    aria-label="Collapse all"
+    disabled={tableTotal > 0 && collapseCount >= tableTotal}
+    onclick={oncollapseall}
+  >
+    ⊟
+  </button>
+  <button
+    class="ctrl-btn ctrl-btn-glyph"
+    title="Expand all tables"
+    aria-label="Expand all"
+    onclick={onexpandall}
+  >
+    ⊞
+  </button>
+  <button
+    class="ctrl-btn ctrl-btn-glyph span-2"
+    title="Collapse all and fit the resulting overview"
+    aria-label="Fit collapsed"
+    onclick={onfitcollapsed}
+  >
+    ⤢ fit collapsed
+  </button>
+
+  <!-- Rows: layout buttons -->
+  {#each LAYOUT_BUTTONS as btn (btn.engine + btn.direction)}
     <button
       class="ctrl-btn ctrl-btn-layout"
       class:active={isLayoutActive(btn)}
@@ -130,7 +181,7 @@
     border: 1px solid var(--xy-controls-button-border-color, #eee);
     border-radius: 4px;
     overflow: hidden;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+    box-shadow: var(--xy-controls-box-shadow, 0 1px 4px rgba(0,0,0,0.12));
   }
 
   .ctrl-btn {
@@ -160,8 +211,21 @@
   }
 
   .ctrl-btn.active {
-    background: #475569;
-    color: #fff;
+    background: var(--erd-controls-active-bg, #475569);
+    color: var(--erd-controls-active-fg, #fff);
+  }
+
+  /* Phase B density controls: wider glyph / label buttons */
+  .ctrl-btn-glyph {
+    font-size: 14px;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+
+  .ctrl-btn.span-2 {
+    grid-column: span 2;
+    width: auto;
+    font-size: 10px;
+    white-space: nowrap;
   }
 
   .icon {

@@ -116,14 +116,14 @@
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #9ca3af;
+    color: #6b7280;
   }
 
   .file-count {
     font-size: 9px;
     font-weight: 700;
     background: #e5e7eb;
-    color: #6b7280;
+    color: #4b5563;
     border-radius: 8px;
     padding: 1px 5px;
     line-height: 1.4;

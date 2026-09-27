@@ -1,7 +1,7 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import type { NodeProps, Node } from '@xyflow/svelte';
-  import type { ErdTableNodeData, GroupInfo } from '$lib/types';
+  import type { ErdTableNodeData, GroupInfo, RelationshipFocus } from '$lib/types';
 
   // Accept the base unparameterised NodeProps — re-derive our data shape below.
   let { data, id }: NodeProps<Node<Record<string, unknown>>> = $props();
@@ -18,6 +18,25 @@
   // Collapse toggle callback — injected via context by +page.svelte
   // so that the parent can update the collapsed Set and trigger a graph rebuild.
   const collapseCtx = getContext<{ toggle: (id: string) => void } | null>('collapseToggle');
+
+  // Search-target context — transient navigation emphasis. The table is
+  // highlighted iff it is the current search target; this is derived, never
+  // written back into the node array.
+  const searchCtx = getContext<{ target: string | null } | null>('searchTarget');
+  const highlighted = $derived(searchCtx?.target === id);
+
+  // Keyboard cursor — the table currently under graph navigation. Derived from
+  // context, never written into the node array.
+  const cursorCtx = getContext<{ id: string | null } | null>('cursor');
+  const isCursor = $derived(cursorCtx?.id === id);
+
+  // Relationship focus — derived from native Svelte Flow selection in
+  // +page.svelte. A table is `related` when it is (or is a neighbour of) the
+  // selected table, and `dimmed` when some focus is active but it is not. This
+  // is a fourth transient state, distinct from searchTarget and cursor.
+  const focusCtx = getContext<RelationshipFocus | null>('relationshipFocus');
+  const isRelated = $derived(focusCtx?.active === true && focusCtx.tableIds.has(id));
+  const isDimmed = $derived(focusCtx?.active === true && !isRelated);
 
   const DEFAULT_COLOR = '#475569';
   const DEFAULT_TEXT = '#ffffff';
@@ -50,7 +69,13 @@
   // ---------------------------------------------------------------------------
   const collapsed = $derived(rawData.collapsed);
 
-  function toggleCollapse() {
+  // Collapse and selection are separate affordances: the header button toggles
+  // collapse only. Stopping propagation keeps a header click from also being
+  // read as a node selection by Svelte Flow — selection is achieved through the
+  // node surface (clicking a column row selects that column, which maps to this
+  // table for relationship focus) or the native selection seam.
+  function toggleCollapse(e: MouseEvent) {
+    e.stopPropagation();
     collapseCtx?.toggle(id);
   }
 </script>
@@ -62,7 +87,10 @@
 <div
   class="table-parent"
   class:collapsed
-  class:highlighted={rawData.highlighted}
+  class:highlighted={highlighted}
+  class:cursor={isCursor}
+  class:related={isRelated}
+  class:dimmed={isDimmed}
 >
   <button
     class="header"
@@ -107,6 +135,24 @@
     border-color: #f59e0b;
     box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.35), 0 1px 4px rgba(0, 0, 0, 0.08);
     transition: box-shadow 0.2s ease, border-color 0.2s ease;
+  }
+
+  /* Keyboard cursor — persistent, non-time-limited focus ring (WCAG 2.4.7). */
+  .table-parent.cursor {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+  }
+
+  /* Relationship focus (R2.4.1) — modest emphasis for the selected table and
+     its neighbours; reduced prominence (not hidden) for everything else. No
+     movement, no geometry change, no animation. */
+  .table-parent.related {
+    border-color: #334155;
+    box-shadow: 0 0 0 2px rgba(51, 65, 85, 0.28), 0 1px 4px rgba(0, 0, 0, 0.08);
+  }
+
+  .table-parent.dimmed {
+    opacity: 0.4;
   }
 
   /* Header */

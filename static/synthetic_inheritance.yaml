@@ -1,0 +1,98 @@
+id: https://example.org/synthetic-inheritance
+name: synthetic_inheritance
+description: >-
+  Synthetic fixture for the authoritative producer. It exercises LinkML
+  inheritance (is_a), mixins, an inherited identifier, a key slot, enum
+  ranges, self-referential foreign keys, and exact_mappings ETL resolution.
+  It exists to prove the producer records effective-slot and relationship
+  facts (including declared_by / inherited_from provenance) from SchemaView
+  alone, with no hand-rolled semantic logic, and that the ERD and SQL
+  generators reconcile against those facts.
+prefixes:
+  linkml: https://w3id.org/linkml/
+  syn: https://example.org/synthetic-inheritance/
+default_prefix: syn
+default_range: string
+imports:
+- linkml:types
+
+classes:
+  Entity:
+    abstract: true
+    description: Abstract base carrying identity and a display name.
+    slots:
+      - entity_id
+      - name
+
+  Timestamped:
+    mixin: true
+    description: Mixin contributing an audit timestamp.
+    slots:
+      - created_at
+
+  Organization:
+    is_a: Entity
+    description: An organisation that can parent other organisations.
+    slots:
+      - parent_org
+      - org_kind
+      - org_source_value
+
+  Person:
+    is_a: Entity
+    mixins:
+      - Timestamped
+    description: A person belonging to an organisation.
+    slots:
+      - org
+      - supervisor
+      - billing_org_code
+
+  Employee:
+    is_a: Person
+    description: An employee, refining inherited slots through slot_usage.
+    slots:
+      - employee_number
+      - employed_by
+    slot_usage:
+      name:
+        required: true
+      org:
+        required: true
+
+slots:
+  entity_id:
+    identifier: true
+    range: string
+  name:
+    range: string
+  created_at:
+    range: datetime
+  parent_org:
+    range: Organization
+  org_kind:
+    range: OrgKind
+  org_source_value:
+    range: string
+    exact_mappings:
+      - syn:Organization.org_source_value
+  org:
+    range: Organization
+  supervisor:
+    range: Person
+  billing_org_code:
+    range: string
+    exact_mappings:
+      - syn:Organization.org_source_value
+  employee_number:
+    key: true
+    range: string
+  employed_by:
+    range: Organization
+    required: true
+
+enums:
+  OrgKind:
+    permissible_values:
+      hospital:
+      clinic:

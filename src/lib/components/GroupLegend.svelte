@@ -8,7 +8,7 @@
     fileInfoList?: FileInfo[];
   } = $props();
 
-  // Group config injected by +page.svelte (same reactive wrapper as TableNode uses).
+  // Group config injected by +page.svelte (same reactive wrapper as TableParentNode uses).
   const groupCtx = getContext<{ map: Map<string, GroupInfo> | null }>('groupConfig');
 
   // Build the ordered list: entries from the map that appear in activeGroupNames,
@@ -31,7 +31,7 @@
   {#if groupEntries.length > 0}
     <section class="section">
       <div class="section-title">Groups</div>
-      {#each groupEntries as d}
+      {#each groupEntries as d (d.name)}
         <div class="group-row">
           <span class="swatch" style:background={d.color}></span>
           <span class="group-label">{d.label}</span>
@@ -45,7 +45,7 @@
   {#if showFiles}
     <section class="section">
       <div class="section-title">Files</div>
-      {#each fileInfoList as f}
+      {#each fileInfoList as f (f.id)}
         <div class="group-row">
           <span class="stripe-swatch" style:background={f.color}></span>
           <span class="group-label" title={f.label}>{f.label}</span>
@@ -110,7 +110,7 @@
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #9ca3af;
+    color: #6b7280;
     margin-bottom: 2px;
   }
 
@@ -164,7 +164,7 @@
     color: #6b7280;
   }
 
-  /* Slot badges — mirrors TableNode.svelte exactly */
+  /* Slot badges — mirrors ColumnNode.svelte exactly */
   .badge {
     font-size: 8px;
     font-weight: 700;
@@ -195,10 +195,10 @@
     font-weight: 700;
   }
 
-  /* ETL mapping sample — mirrors .slot-mapping in TableNode */
+  /* ETL mapping sample — mirrors .slot-mapping in ColumnNode */
   .legend-mapping {
     font-size: 9px;
-    color: #6366f1;
+    color: var(--erd-edge-label-etl);
     font-style: italic;
     font-family: ui-monospace, monospace;
   }
@@ -207,7 +207,7 @@
     display: inline-block;
     width: 28px;
     height: 0;
-    border-top: 2px dashed #6366f1;
+    border-top: 2px dashed var(--erd-edge-etl);
     flex-shrink: 0;
   }
 </style>

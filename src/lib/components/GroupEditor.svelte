@@ -52,7 +52,7 @@
       <span class="col-label" style="grid-column: 5">Text</span>
     </div>
 
-    {#each rows as row, i}
+    {#each rows as row, i (i)}
       <div class="group-row" class:is-default={isDefault(row)}>
         <!-- Delete button -->
         <button
@@ -115,7 +115,10 @@
 
 <style>
   .group-editor-panel {
-    width: 360px;
+    /* Viewport-aware width (R2.7.2): pixel-identical to 360px at >=1125px
+       (32vw >= 360) but shrinks below so the panel never drives the canvas to
+       0. At 1280/1600 this resolves to exactly 360px — unchanged. */
+    width: min(360px, 32vw);
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
@@ -179,7 +182,7 @@
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: #9ca3af;
+    color: #6b7280;
   }
 
   /* Each group row */

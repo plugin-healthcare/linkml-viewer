@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { parseWorkspaceFile } from '$lib/linkml';
+  import { load as yamlLoad } from 'js-yaml';
+  import { describeWorkspaceFile } from '$lib/linkml';
   import type { WorkspaceFile } from '$lib/types';
 
   interface Props {
@@ -34,8 +35,10 @@
       }
       try {
         const text = await file.text();
-        const wf = parseWorkspaceFile(file.name, text);
-        const hasClasses = Object.keys(wf.schema.classes).length > 0;
+        const wf = describeWorkspaceFile(file.name, text);
+        const raw = yamlLoad(text) as { classes?: Record<string, unknown> } | null;
+        const hasClasses = !!raw && typeof raw === 'object' && !!raw.classes
+          && Object.keys(raw.classes).length > 0;
         const hasImports = wf.imports.length > 0;
         if (!hasClasses && !hasImports) {
           errs.push(`${file.name}: no classes or imports found — is this a valid LinkML schema?`);

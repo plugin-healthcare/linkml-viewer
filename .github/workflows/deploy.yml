@@ -28,6 +28,14 @@ jobs:
           node-version: 22
           cache: npm
 
+      # The build runs the single LinkML producer (produce.py) via the Vite
+      # plugin as `uv run --with linkml==1.11.1 --python 3.12 produce.py --all`.
+      # Provision uv and the pinned Python so the producer step can run on CI.
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.12'
+
       - name: Install dependencies
         run: npm ci
 
